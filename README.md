@@ -32,6 +32,9 @@ porte son nom dans le **titre de fenêtre kitty**, et est visible/pilotable depu
   `sessions/*.session` (monitoring k9s local/develop/prod), `kitty.desktop` (actions clic-droit).
 
 ## Déploiement
+`./install.sh` pose des **liens symboliques** depuis ce repo vers les emplacements ci-dessous
+(le **repo = source de vérité** : éditer un fichier du repo = éditer le live ; les fichiers
+existants sont sauvegardés en `.bak`).
 - `scripts/*` → `~/.claude/scripts/` (+ liens `~/.local/bin/matrix`, `~/.local/bin/redpill`)
 - `hooks/*` → `~/.claude/hooks/` (câblés dans `~/.claude/settings.json` : Notification, Stop,
   SessionEnd, SessionStart)
