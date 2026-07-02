@@ -1,0 +1,31 @@
+[Desktop Entry]
+Version=1.0
+Name=kitty
+GenericName=Terminal emulator
+Comment=Fast, feature-rich, GPU based terminal
+Exec=/home/r3n0j/.local/kitty.app/bin/kitty
+Icon=/home/r3n0j/.local/kitty.app/share/icons/hicolor/scalable/apps/kitty.svg
+Type=Application
+Terminal=false
+Categories=System;TerminalEmulator;
+Actions=red-pill;the-matrix;monitoring-local;monitoring-develop;monitoring-prod;
+
+[Desktop Action red-pill]
+Name=Red Pill
+Exec=/home/r3n0j/.local/kitty.app/bin/kitty zsh -ic redpill
+
+[Desktop Action the-matrix]
+Name=The Matrix
+Exec=/home/r3n0j/.local/kitty.app/bin/kitty --config /home/r3n0j/.config/kitty/matrix-window.conf --title "The Matrix" zsh -ic ccs
+
+[Desktop Action monitoring-local]
+Name=Monitoring local
+Exec=/home/r3n0j/.local/kitty.app/bin/kitty --session /home/r3n0j/.config/kitty/sessions/local.session
+
+[Desktop Action monitoring-develop]
+Name=Monitoring develop
+Exec=/home/r3n0j/.local/kitty.app/bin/kitty --session /home/r3n0j/.config/kitty/sessions/develop.session
+
+[Desktop Action monitoring-prod]
+Name=Monitoring prod
+Exec=/home/r3n0j/.local/kitty.app/bin/kitty --session /home/r3n0j/.config/kitty/sessions/prod.session

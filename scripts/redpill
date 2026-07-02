@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""redpill — choisis ta réalité : reprendre une session Claude récente, ou en démarrer une.
+
+Menu au lancement :
+  - liste des sessions récentes → sélection directe = reprise personnifiée
+    (`matrix resume <uuid>` dans le dossier de la session) ;
+  - « n » ou Entrée = nouvelle session → choix d'un repo (dossier user par défaut).
+
+Pas de reprise par défaut : Entrée démarre une nouvelle session.
+"""
+import os
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import matrix_lib as m
+
+REPOS = os.path.expanduser("~/Arx/repositories")
+HOME = os.path.expanduser("~")
+GREEN, BRIGHT, DIM, RESET = "\033[32m", "\033[92m", "\033[2m", "\033[0m"
+
+
+def fmt_age(sec):
+    sec = int(sec)
+    if sec < 60:
+        return "%ds" % sec
+    if sec < 3600:
+        return "%dm" % (sec // 60)
+    if sec < 86400:
+        return "%dh" % (sec // 3600)
+    return "%dd" % (sec // 86400)
+
+
+def trunc(s, n):
+    s = s or ""
+    return s if len(s) <= n else s[:n - 1] + "…"
+
+
+def list_repos():
+    try:
+        return sorted(d for d in os.listdir(REPOS)
+                      if os.path.isdir(os.path.join(REPOS, d)) and not d.startswith("."))
+    except OSError:
+        return []
+
+
+def choose_repo():
+    """Sélecteur de repo (dossier user par défaut). Renvoie le chemin cible."""
+    repos = list_repos()
+    sys.stderr.write("\n%sNouvelle session%s — choisis un repo :\n\n" % (BRIGHT, RESET))
+    sys.stderr.write("   %s0%s) ~  %s(dossier user — défaut)%s\n" % (BRIGHT, RESET, DIM, RESET))
+    for i, r in enumerate(repos, 1):
+        sys.stderr.write("  %3d) %s\n" % (i, r))
+    while True:
+        try:
+            raw = input("\n%sredpill%s > repo # ou nom (Entrée = user) : " % (GREEN, RESET)).strip()
+        except (EOFError, KeyboardInterrupt):
+            return HOME
+        if raw in ("", "0"):
+            return HOME
+        if raw.isdigit():
+            i = int(raw)
+            if 1 <= i <= len(repos):
+                return os.path.join(REPOS, repos[i - 1])
+            sys.stderr.write(DIM + "  numéro hors plage\n" + RESET)
+            continue
+        hits = [r for r in repos if raw.lower() in r.lower()]
+        if len(hits) == 1:
+            return os.path.join(REPOS, hits[0])
+        sys.stderr.write(DIM + ("  aucun repo ne correspond\n" if not hits
+                                else "  plusieurs : " + ", ".join(hits) + "\n") + RESET)
+
+
+def new_session():
+    target = choose_repo()
+    try:
+        os.chdir(target)
+    except OSError:
+        os.chdir(HOME)
+    os.execvp("matrix", ["matrix"])
+
+
+def main():
+    sessions = m.list_sessions()
+    now = time.time()
+    sys.stderr.write("\n%sThe Matrix has you...%s  choisis ta réalité :\n\n" % (GREEN, RESET))
+    if sessions:
+        sys.stderr.write("%s↻ Reprendre une session :%s\n" % (BRIGHT, RESET))
+        for i, s in enumerate(sessions, 1):
+            agent = s.get("agent") or "—"
+            sys.stderr.write("  %2d) %-14s %s%-14s%s %-30s %s(%s)%s\n" % (
+                i, trunc(s["project"], 14), GREEN, trunc(agent, 14), RESET,
+                trunc(s["label"], 30), DIM, fmt_age(now - s["mtime"]), RESET))
+        sys.stderr.write("\n")
+    sys.stderr.write("  %sn%s) nouvelle session (choisir un repo)\n" % (BRIGHT, RESET))
+    try:
+        choice = input("\n%sredpill%s > numéro (reprise) ou n / Entrée (nouveau) : " % (GREEN, RESET)).strip()
+    except (EOFError, KeyboardInterrupt):
+        choice = ""
+    if choice.isdigit() and 1 <= int(choice) <= len(sessions):
+        s = sessions[int(choice) - 1]
+        if s.get("cwd") and os.path.isdir(s["cwd"]):
+            os.chdir(s["cwd"])
+        os.execvp("matrix", ["matrix", "resume", s["sid"]])
+    new_session()
+
+
+if __name__ == "__main__":
+    main()

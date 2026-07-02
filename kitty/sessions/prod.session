@@ -1,0 +1,7 @@
+# Monitoring — cluster prod
+# Lancement : kitty --single-instance --session ~/.config/kitty/sessions/prod.session
+new_tab prod
+layout fat:bias=75
+launch --title "k9s (prod)"   zsh -is eval 'k8s connect prod && k9s'
+launch --title "shell (prod)" zsh -is eval 'k8s connect prod'
+launch --title "shell (prod)" zsh -is eval 'k8s connect prod'

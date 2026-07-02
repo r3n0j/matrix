@@ -1,0 +1,9 @@
+# Pilote k9s — cluster local (k3d)
+# Reproduit le layout Tilix tilix-local.json : k9s en grand en haut,
+# deux shells connectés au cluster côte à côte en bas (layout "fat").
+# Lancement : kitty --single-instance --session ~/.config/kitty/sessions/local.session
+new_tab local
+layout fat:bias=75
+launch --title "k9s (local)"   zsh -is eval 'k8s connect local && k9s'
+launch --title "shell (local)" zsh -is eval 'k8s connect local'
+launch --title "shell (local)" zsh -is eval 'k8s connect local'

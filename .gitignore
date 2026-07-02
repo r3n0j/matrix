@@ -1,0 +1,14 @@
+# Secrets & état runtime — ne JAMAIS committer
+*.env
+.env
+config.json
+state.json
+state.lock
+inbox/
+approved/
+
+# Images (hébergées séparément : repo r3n0j/matrix)
+*.png
+*.jpeg
+*.jpg
+*.webp

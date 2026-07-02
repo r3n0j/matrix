@@ -1,0 +1,7 @@
+# Monitoring — cluster develop
+# Lancement : kitty --single-instance --session ~/.config/kitty/sessions/develop.session
+new_tab develop
+layout fat:bias=75
+launch --title "k9s (develop)"   zsh -is eval 'k8s connect develop && k9s'
+launch --title "shell (develop)" zsh -is eval 'k8s connect develop'
+launch --title "shell (develop)" zsh -is eval 'k8s connect develop'

@@ -1,0 +1,1209 @@
+#!/usr/bin/env python3
+"""claude-sessions — vue terminal des sessions Claude Code du jour.
+
+Lit ~/.claude/projects/**/*.jsonl, ne garde que les transcripts modifiés
+aujourd'hui. Affiche project / status / title / last activity / model / prompt.
+LAST = temps écoulé depuis la dernière interaction (pas l'âge de la session).
+
+Statut déduit de la fraîcheur du transcript (heuristique, pas un vrai signal
+de process) :
+  ● active   — activité très récente (Claude travaille)
+  ◐ waiting  — réponse rendue récemment, attend probablement une réponse
+  ○ idle     — plus d'activité depuis un moment
+
+Options :
+  (défaut)        live, redessiné toutes les 60 s
+  --once / -1     snapshot puis rend la main
+  --all  / -a     inclut les sessions d'agent (agenda, mail, obs-*…)
+  --full / -f     colonnes CTX (contexte) + OUT (tokens générés)
+  --hide-idle     masque les sessions inactives (○ unplugged)
+  --interval N    intervalle de rafraîchissement en s (défaut 60)
+  --ctx-max N     seuil pour la couleur de CTX (défaut 200000)
+
+Touches (mode live) :
+  ↑↓ / j k        naviguer ; PgUp/PgDn page ; g/G haut/bas
+  ⏎               focus la fenêtre kitty de l'agent (sinon reprise dans une nouvelle)
+  o               ouvrir le détail de la session (métadonnées + tours)
+  Esc             revenir à la liste (depuis le détail)
+  /               filtrer la liste (projet / titre / prompt) ; Esc efface
+  R               reprendre la session (claude --resume) dans son cwd
+  Ctrl+K          fermer la session : tue le process (SIGTERM) après confirmation
+  0               afficher/masquer les sessions de fond
+  i               afficher/masquer les sessions inactives (○ unplugged)
+  t               afficher/masquer tokens + coût
+  s               changer le tri (activité / contexte / tokens)
+  p               pause/reprise du refresh ; r : refresh immédiat
+  q               quitter
+
+Le mode --full / -f (ou t) ajoute CTX (contexte), OUT (tokens générés) et
+COST (coût $ estimé). MODEL est coloré par famille. Statut `● live` =
+session reprise via `claude --resume` détectée (fiable) ; sinon heuristique.
+"""
+import glob
+import json
+import os
+import select
+import signal
+import shutil
+import subprocess
+import sys
+import termios
+import time
+import tty
+
+PROJECTS = os.path.expanduser("~/.claude/projects")
+
+ACTIVE_MAX = 15       # s : en dessous → actif
+WAITING_MAX = 300     # s : en dessous → en attente, au delà → inactif
+RESPONDING_MAX = 600  # s : dernier message = user (prompt) → considéré actif
+
+# Couleurs ANSI (activées seulement si sortie = terminal)
+USE_COLOR = sys.stdout.isatty()
+
+
+def c(code, text):
+    return ("\033[%sm%s\033[0m" % (code, text)) if USE_COLOR else text
+
+
+# Palette inspirée du thème k9s par défaut (codes 256 couleurs).
+T_LOGO = "1;38;5;46"           # titre principal — vert Matrix
+T_BORDER = "38;5;33"           # bordures du cadre — dodgerblue
+T_TITLE = "1;38;5;51"          # titre du cadre "Sessions[n]" — aqua
+T_LBL = "38;5;117"             # libellés info / clés — bleu clair
+T_VAL = "38;5;231"             # valeurs — blanc
+T_KEY = "1;38;5;33"            # touches de raccourci — dodgerblue
+T_DESC = "38;5;250"            # description de raccourci — gris clair
+T_HDR = "1;38;5;51"            # en-têtes de colonnes — aqua
+T_ACTIVE = "1;38;5;42"         # option active / statut actif — vert
+T_DIM = "38;5;244"             # texte secondaire / idle — gris
+T_GREEN = "38;5;42"
+T_YELLOW = "38;5;214"
+T_RED = "38;5;197"
+T_CURSOR = "38;5;16;48;5;51"   # ligne sélectionnée — noir sur fond aqua
+
+
+def start_of_today():
+    lt = time.localtime()
+    return time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, 0, 0, 0, 0, 0, -1))
+
+
+# Tarifs $ par million de tokens (input, output) — cache read ≈ 0,1×, write ≈ 1,25×.
+MODEL_PRICES = {"fable": (10, 50), "mythos": (10, 50),
+                "opus": (5, 25), "sonnet": (3, 15), "haiku": (1, 5)}
+
+
+def model_prices(model):
+    m = (model or "").lower()
+    for key, prices in MODEL_PRICES.items():
+        if key in m:
+            return prices
+    return (5, 25)  # défaut tarif Opus
+
+
+def session_cost(inp, cache_read, cache_creation, out, model):
+    """Coût estimé de la session en $ (heuristique : tarifs publics × tokens cumulés)."""
+    pin, pout = model_prices(model)
+    return ((inp * pin) + (cache_creation * pin * 1.25)
+            + (cache_read * pin * 0.1) + (out * pout)) / 1_000_000
+
+
+def fmt_cost(v):
+    if v is None:
+        return "—"
+    if v < 0.01:
+        return "<$.01"
+    return "$%.2f" % v
+
+
+def model_color(model):
+    """Couleur par famille de modèle, pour le repérage visuel."""
+    m = (model or "").lower()
+    if "fable" in m or "mythos" in m:
+        return "1;38;5;208"   # orange vif
+    if "opus" in m:
+        return "38;5;170"     # magenta
+    if "sonnet" in m:
+        return "38;5;75"      # bleu
+    if "haiku" in m:
+        return "38;5;78"      # vert
+    return T_VAL
+
+
+def parse_session(path, with_tokens=False):
+    """Retourne un dict décrivant la session, ou None si illisible.
+
+    with_tokens : parse aussi l'usage de tous les messages assistant pour la
+    taille de contexte et le cumul de tokens (plus coûteux ; off par défaut)."""
+    try:
+        with open(path) as f:
+            lines = f.readlines()
+    except Exception:
+        return None
+
+    ai_title = None
+    custom_name = None
+    last_prompt = None
+    cwd = None
+    git_branch = None
+    last_msg_type = None
+    is_agent = False
+    entrypoint = None
+    context_tokens = None
+    output_total = 0
+    input_total = 0
+    cache_read_total = 0
+    cache_creation_total = 0
+    model = None
+
+    # Parcours à rebours : on prend la 1re occurrence (= la plus récente) de chaque info.
+    for line in reversed(lines):
+        if not is_agent and '"agent-setting"' in line:
+            is_agent = True
+        if ai_title is None and '"ai-title"' in line:
+            try:
+                ai_title = json.loads(line).get("aiTitle")
+            except Exception:
+                pass
+        if custom_name is None and '"agent-name"' in line:
+            try:
+                custom_name = json.loads(line).get("agentName")
+            except Exception:
+                pass
+        if last_prompt is None and '"last-prompt"' in line:
+            try:
+                last_prompt = json.loads(line).get("lastPrompt")
+            except Exception:
+                pass
+        is_asst = '"assistant"' in line
+        is_msg = is_asst or '"user"' in line
+        # On parse une ligne message si : cwd manquant, modèle manquant (assistant),
+        # ou mode tokens (tous les assistants, pour le cumul).
+        if is_msg and (cwd is None or (is_asst and (model is None or with_tokens))):
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            t = obj.get("type")
+            msg = obj.get("message") or {}
+            if t in ("assistant", "user") and cwd is None:
+                cwd = obj.get("cwd")
+                git_branch = obj.get("gitBranch")
+                if entrypoint is None:
+                    entrypoint = obj.get("entrypoint")
+                if last_msg_type is None:
+                    last_msg_type = t
+            if t == "assistant":
+                if model is None:  # 1er en reverse = dernier message
+                    model = msg.get("model")
+                if with_tokens:
+                    u = msg.get("usage") or {}
+                    output_total += u.get("output_tokens") or 0
+                    input_total += u.get("input_tokens") or 0
+                    cache_read_total += u.get("cache_read_input_tokens") or 0
+                    cache_creation_total += u.get("cache_creation_input_tokens") or 0
+                    if context_tokens is None:
+                        context_tokens = ((u.get("input_tokens") or 0)
+                                          + (u.get("cache_read_input_tokens") or 0)
+                                          + (u.get("cache_creation_input_tokens") or 0))
+
+    sid = os.path.basename(path)[:-6]  # retire .jsonl
+    project = os.path.basename((cwd or os.path.dirname(path)).rstrip("/"))
+    title = ai_title or ("session " + sid[:8])
+    try:
+        mtime = os.path.getmtime(path)
+    except Exception:
+        mtime = 0
+
+    # Création de la session = 1er timestamp du transcript (scan rapide du début).
+    started = None
+    for line in lines:
+        if '"timestamp"' in line:
+            try:
+                started = parse_ts(json.loads(line).get("timestamp"))
+            except Exception:
+                started = None
+            if started:
+                break
+
+    # Session de fond (non interactive) : agent, ou lancée via SDK (cron, /morning…).
+    background = is_agent or (entrypoint == "sdk-cli")
+    cost = session_cost(input_total, cache_read_total, cache_creation_total,
+                        output_total, model) if with_tokens else None
+
+    return {
+        "sid": sid,
+        "path": path,
+        "started": started,
+        "background": background,
+        "cwd": cwd,
+        "project": project,
+        "branch": git_branch,
+        "title": title,
+        "last_prompt": (last_prompt or "").replace("\n", " ").strip(),
+        "last_msg_type": last_msg_type,
+        "is_agent": is_agent,
+        "entrypoint": entrypoint,
+        "custom_name": custom_name,
+        "mtime": mtime,
+        "context_tokens": context_tokens,
+        "output_total": output_total,
+        "cost": cost,
+        "model": model,
+    }
+
+
+def claude_procs():
+    """Process `claude` vivants : dicts {pid, cwd, resume_id, entrypoint, started}.
+    Retourne None si /proc est inaccessible. Sert au statut `live` (lien FIABLE via
+    --resume) et à la fermeture (identification du process par cwd, faute de mieux :
+    le session id n'apparaît ni dans la cmdline, ni dans l'environ, ni en fd ouvert)."""
+    try:
+        pids = [p for p in os.listdir("/proc") if p.isdigit()]
+    except Exception:
+        return None
+    procs = []
+    for pid in pids:
+        try:
+            with open("/proc/%s/cmdline" % pid, "rb") as f:
+                argv = [a.decode("utf-8", "ignore") for a in f.read().split(b"\0") if a]
+        except Exception:
+            continue
+        if not argv or os.path.basename(argv[0]) != "claude":
+            continue
+        resume_id = None
+        if "--resume" in argv:
+            try:
+                resume_id = argv[argv.index("--resume") + 1]
+            except (ValueError, IndexError):
+                pass
+        try:
+            cwd = os.readlink("/proc/%s/cwd" % pid)
+        except Exception:
+            cwd = None
+        entrypoint = None
+        try:
+            with open("/proc/%s/environ" % pid, "rb") as f:
+                for kv_ in f.read().split(b"\0"):
+                    if kv_.startswith(b"CLAUDE_CODE_ENTRYPOINT="):
+                        entrypoint = kv_.split(b"=", 1)[1].decode("utf-8", "ignore")
+                        break
+        except Exception:
+            pass
+        try:
+            started = os.stat("/proc/%s" % pid).st_ctime
+        except Exception:
+            started = None
+        procs.append({"pid": int(pid), "cwd": cwd, "resume_id": resume_id,
+                      "entrypoint": entrypoint, "started": started})
+    return procs
+
+
+def kill_candidates(sess, procs):
+    """Process candidats pour fermer `sess`. Lien fiable d'abord (process repris avec
+    ce sid exact), sinon match par cwd (ambigu si plusieurs sessions au même dossier)."""
+    if procs is None:
+        return None
+    exact = [p for p in procs if p.get("resume_id") == sess.get("sid")]
+    if exact:
+        return exact
+    cwd = sess.get("cwd")
+    if not cwd:
+        return []
+    return [p for p in procs if p.get("cwd") == cwd]
+
+
+STATUS_META = {  # état brut → (couleur, libellé thème Matrix)
+    "live": (T_ACTIVE, "● jacked in"),
+    "active": (T_ACTIVE, "● in construct"),
+    "waiting": (T_YELLOW, "◐ awaiting"),
+    "idle": (T_DIM, "○ unplugged"),
+}
+
+
+def status_kind(sess, now):
+    """État brut de la session ('live'/'active'/'waiting'/'idle') + âge depuis mtime."""
+    age = now - sess["mtime"]
+    if sess.get("live"):  # process repris confirmé (claude --resume) → fiable
+        return "live", age
+    if sess["last_msg_type"] == "user" and age < RESPONDING_MAX:
+        return "active", age
+    if age < ACTIVE_MAX:
+        return "active", age
+    if age < WAITING_MAX:
+        return "waiting", age
+    return "idle", age
+
+
+def status(sess, now):
+    kind, age = status_kind(sess, now)
+    code, label = STATUS_META[kind]
+    return c(code, label), age
+
+
+HOST_META = {"vscode": ("38;5;75", "vscode"), "kitty": (T_GREEN, "kitty"), "bg": (T_DIM, "bg")}
+
+
+def host_cell(sess):
+    """Hôte de la session (kitty / vscode / bg) déduit de l'entrypoint du transcript."""
+    ep = sess.get("entrypoint") or ""
+    if "vscode" in ep:
+        key = "vscode"
+    elif ep == "sdk-cli":
+        key = "bg"
+    elif ep == "cli":
+        key = "kitty"
+    else:
+        key = None
+    if key:
+        code, text = HOST_META[key]
+        return c(code, text)
+    return c(T_DIM, ep or "—")
+
+
+def drop_idle(sessions, hide):
+    """Filtre les sessions inactives si `hide` est vrai (recalculé sur l'instant courant)."""
+    if not hide:
+        return sessions
+    now = time.time()
+    return [s for s in sessions if status_kind(s, now)[0] != "idle"]
+
+
+def fmt_age(age):
+    age = int(age)
+    if age < 60:
+        return "%ds" % age
+    if age < 3600:
+        return "%dm" % (age // 60)
+    if age < 86400:
+        return "%dh" % (age // 3600)
+    return "%dd" % (age // 86400)
+
+
+def fmt_tokens(n):
+    if not n:
+        return "—" if n is None else "0"
+    if n < 1000:
+        return str(n)
+    if n < 1_000_000:
+        return "%.0fk" % (n / 1000)
+    return "%.1fM" % (n / 1_000_000)
+
+
+def short_model(m):
+    return m.replace("claude-", "") if m else "—"
+
+
+def trunc(s, n):
+    s = s or ""
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def visible_len(s):
+    """Longueur affichée en ignorant les codes ANSI."""
+    out, i = 0, 0
+    while i < len(s):
+        if s[i] == "\033":
+            while i < len(s) and s[i] != "m":
+                i += 1
+            i += 1
+        else:
+            out += 1
+            i += 1
+    return out
+
+
+def pad(s, n):
+    return s + " " * max(0, n - visible_len(s))
+
+
+def title_cell(s, width):
+    """Cellule TITLE : « /rename · ai-title » (rename en clair, ai-title en gris)
+    quand un vrai /rename existe ; sinon juste l'ai-title."""
+    ai = s.get("title") or ""
+    cn = s.get("custom_name")
+    if not cn:
+        return trunc(ai, width)
+    full = trunc(cn + " · " + ai, width)
+    if full.startswith(cn):
+        return c(T_VAL, cn) + c(T_DIM, full[len(cn):])
+    return c(T_VAL, full)
+
+
+def matrix_state():
+    """Map session_id -> entrée Matrix (agent, fenêtre/socket kitty). {} si indispo."""
+    try:
+        import matrix_lib
+        return matrix_lib.all_sessions()
+    except Exception:
+        return {}
+
+
+def matrix_personas():
+    """Ensemble des noms du pool Matrix (pour distinguer un vrai /rename du persona)."""
+    try:
+        import matrix_lib
+        return set((matrix_lib.load_config() or {}).get("personas") or [])
+    except Exception:
+        return set()
+
+
+def collect(include_agents, with_tokens=False):
+    cutoff = start_of_today()
+    procs = claude_procs()  # process claude vivants (statut live + fermeture)
+    resume_ids = (set(p["resume_id"] for p in procs if p.get("resume_id"))
+                  if procs is not None else None)
+    sessions = []
+    for path in glob.glob(os.path.join(PROJECTS, "*", "*.jsonl")):
+        try:
+            if os.path.getmtime(path) < cutoff:
+                continue
+        except Exception:
+            continue
+        s = parse_session(path, with_tokens=with_tokens)
+        if not s:
+            continue
+        if s["background"] and not include_agents:
+            continue
+        s["live"] = bool(resume_ids and s["sid"] in resume_ids)
+        sessions.append(s)
+    mx = matrix_state()
+    pool = matrix_personas()
+    for s in sessions:
+        e = mx.get(s["sid"]) or {}
+        s["agent"] = e.get("agent")
+        s["mx_window"] = e.get("kitty_window_id")
+        s["mx_socket"] = e.get("kitty_listen_on")
+        cn = s.get("custom_name")
+        # ne garder le /rename que s'il est distinct (pas un persona, pas l'ai-title)
+        s["custom_name"] = cn if (cn and cn not in pool and cn != s.get("title")) else None
+    sessions.sort(key=lambda s: s["mtime"], reverse=True)
+    return sessions
+
+
+def kv(label, val, lw=9):
+    """Paire clé/valeur façon header k9s : clé bleu clair alignée, valeur blanche."""
+    return c(T_LBL, label.ljust(lw)) + c(T_VAL, str(val))
+
+
+def hk(key, desc, kw=5):
+    """Raccourci façon k9s : touche dodgerblue alignée, description gris clair."""
+    return c(T_KEY, key.ljust(max(kw, len(key) + 1))) + c(T_DESC, desc)
+
+
+def opt(active, label):
+    """Option d'un toggle : active = vert avec ▸, inactive = grise."""
+    return c(T_ACTIVE, "▸ " + label) if active else c(T_DIM, "  " + label)
+
+
+def side_by_side(blocks, gap=4):
+    """Assemble des blocs de lignes en colonnes juxtaposées (ANSI-aware)."""
+    widths = [max((visible_len(x) for x in b), default=0) for b in blocks]
+    height = max((len(b) for b in blocks), default=0)
+    rows = []
+    for i in range(height):
+        cells = [pad(b[i] if i < len(b) else "", w) for b, w in zip(blocks, widths)]
+        rows.append((" " * gap).join(cells))
+    return rows
+
+
+def box(title, lines, width):
+    """Encadre des lignes (déjà à la largeur de contenu) façon k9s. `title` est
+    déjà colorisé (on mesure sa largeur visible pour le filet du haut)."""
+    inner = max(6, width - 2)        # entre les bordures │ … │
+    contentw = inner - 2            # marge d'un espace de chaque côté
+    dashes = max(0, inner - visible_len(title) - 3)
+    out = [c(T_BORDER, "┌─ ") + title + c(T_BORDER, " " + "─" * dashes + "┐")]
+    for ln in lines:
+        out.append(c(T_BORDER, "│ ") + pad(ln, contentw) + c(T_BORDER, " │"))
+    out.append(c(T_BORDER, "└" + "─" * inner + "┘"))
+    return out
+
+
+def list_capacity(term_lines, paused, extra=0):
+    """Nombre de sessions affichables dans le cadre selon la hauteur du terminal.
+    En-tête live ≈ 7 lignes (titre + bloc colonnes + blanc) ; +3 lignes de cadre ;
+    `extra` = lignes supplémentaires (ex. ligne de filtre)."""
+    head = 7 if paused is not None else 2
+    return max(1, term_lines - head - 4 - extra)
+
+
+def matches(s, q):
+    """Vrai si la session correspond au filtre (projet, titre ou dernier prompt)."""
+    if not q:
+        return True
+    q = q.lower()
+    return (q in (s.get("project") or "").lower()
+            or q in (s.get("title") or "").lower()
+            or q in (s.get("last_prompt") or "").lower())
+
+
+def strip_ansi(s):
+    out, i = [], 0
+    while i < len(s):
+        if s[i] == "\033":
+            while i < len(s) and s[i] != "m":
+                i += 1
+            i += 1
+        else:
+            out.append(s[i])
+            i += 1
+    return "".join(out)
+
+
+SORT_LABELS = ["last activity", "context", "tokens"]
+
+
+def sort_sessions(sessions, mode):
+    if mode == 1:
+        sessions.sort(key=lambda s: s.get("context_tokens") or 0, reverse=True)
+    elif mode == 2:
+        sessions.sort(key=lambda s: s.get("output_total") or 0, reverse=True)
+    else:
+        sessions.sort(key=lambda s: s["mtime"], reverse=True)
+    return sessions
+
+
+def ctx_cell(n, ctx_max):
+    """Taille de contexte colorée selon le taux de remplissage (vert/jaune/rouge)."""
+    txt = fmt_tokens(n)
+    if n is None:
+        return c(T_DIM, txt)
+    r = (n / ctx_max) if ctx_max else 0
+    code = T_GREEN if r < 0.6 else T_YELLOW if r < 0.85 else T_RED
+    return c(code, txt)
+
+
+def render(sessions, include_agents, paused=None, interval=None, full=False,
+           sel=-1, sort_mode=0, ctx_max=200000, top=0, query="", searching=False,
+           hide_idle=False):
+    now = time.time()
+    when = time.strftime("%H:%M:%S", time.localtime(now))
+    n = len(sessions)
+    term = shutil.get_terminal_size((120, 40))
+
+    det = "on" if full else "off"
+
+    # ---- En-tête multi-colonnes façon k9s (au-dessus du cadre) ----
+    if paused is not None:  # mode live
+        col1 = [
+            kv("Sessions", n),
+            kv("Sort", SORT_LABELS[sort_mode]),
+            kv("Tokens", det),
+            kv("Unplugged", "hidden" if hide_idle else "shown"),
+            kv("Refresh", "paused" if paused else "%ds" % interval),
+            kv("Updated", when),
+        ]
+        col2 = [
+            c(T_LBL, "Background ") + c(T_KEY, "<0>"),
+            opt(not include_agents, "hidden"),
+            opt(include_agents, "shown"),
+        ]
+        col3a = [hk("<↑↓>", "navigate"), hk("<⏎>", "focus win"), hk("</>", "search"),
+                 hk("<R>", "resume"), hk("<o>", "detail"), hk("<^K>", "kill")]
+        col3b = [hk("<s>", "sort"), hk("<t>", "tokens"), hk("<i>", "unplugged"),
+                 hk("<p>", "pause"), hk("<r>", "refresh"), hk("<q>", "quit")]
+        out = [c(T_LOGO, "The Matrix") + c(T_DIM, "   The Matrix has you")]
+        out += side_by_side([col1, col2, col3a, col3b])
+        if searching:  # saisie de filtre en cours
+            out.append(c(T_KEY, "/") + c(T_VAL, query) + c(T_ACTIVE, "▌"))
+        elif query:    # filtre appliqué
+            out.append(c(T_LBL, "filter ") + c(T_KEY, "/" + query)
+                       + c(T_DIM, "   (Esc clears)"))
+        out.append("")
+    else:
+        out = [c(T_LOGO, "The Matrix") + c(T_DIM, "  The Matrix has you  (%s)" % when), ""]
+
+    # ---- Tableau encadré. MODEL toujours affiché ; LAST PROMPT prend le reste. ----
+    if full:
+        fixed = [("PROJECT", 16), ("STATUS", 16), ("AGENT", 15), ("HOST", 7), ("TITLE", 16), ("LAST", 6),
+                 ("AGE", 6), ("CTX", 6), ("OUT", 6), ("COST", 7), ("MODEL", 12)]
+    else:
+        fixed = [("PROJECT", 16), ("STATUS", 16), ("AGENT", 15), ("HOST", 7), ("TITLE", 26), ("LAST", 6),
+                 ("AGE", 6), ("MODEL", 12)]
+    sep = 2
+    box_w = term.columns
+    contentw = max(40, box_w - 4)
+    used = sum(w for _, w in fixed) + sep * len(fixed)
+    prompt_w = max(10, contentw - used)
+
+    HEAD = T_HDR  # en-têtes de colonnes — aqua gras
+    head_cells = [pad(c(HEAD, name), w) for name, w in fixed]
+    head_cells.append(pad(c(HEAD, "LAST PROMPT"), prompt_w))
+    table = [(" " * sep).join(head_cells)]
+
+    # Fenêtre de scroll : en live on n'affiche que ce qui tient ; --once affiche tout.
+    if paused is None:
+        rows, top = n, 0
+    else:
+        rows = list_capacity(term.lines, paused, 1 if (searching or query) else 0)
+        top = max(0, min(top, max(0, n - rows)))
+
+    if not sessions:
+        table.append(c(T_DIM, "(no sessions today)"))
+    for idx in range(top, min(top + rows, n)):
+        s = sessions[idx]
+        st, last = status(s, now)
+        started = s.get("started")
+        age = (now - started) if started else last
+        proj = c(T_DIM, trunc(s["project"], 7) + " [bg]") if s.get("background") \
+            else trunc(s["project"], 16)
+        model = pad(c(model_color(s.get("model")), trunc(short_model(s.get("model")), 12)), 12)
+        ag = s.get("agent")
+        agent_cell = c(T_GREEN, trunc(ag, 15)) if ag else c(T_DIM, "—")
+        cells = [pad(proj, 16), pad(st, 16), pad(agent_cell, 15), pad(host_cell(s), 7)]
+        if full:
+            cells += [pad(title_cell(s, 16), 16), pad(fmt_age(last), 6),
+                      pad(fmt_age(age), 6),
+                      pad(ctx_cell(s.get("context_tokens"), ctx_max), 6),
+                      pad(fmt_tokens(s.get("output_total")), 6),
+                      pad(fmt_cost(s.get("cost")), 7), model]
+        else:
+            cells += [pad(title_cell(s, 26), 26), pad(fmt_age(last), 6),
+                      pad(fmt_age(age), 6), model]
+        cells.append(pad(trunc(s["last_prompt"], prompt_w), prompt_w))
+        row = (" " * sep).join(cells)
+        if idx == sel:  # ligne sélectionnée : curseur k9s (noir sur aqua), pleine largeur
+            if USE_COLOR:
+                row = c(T_CURSOR, pad(strip_ansi(row), contentw))
+            else:
+                row = ("> " + strip_ansi(row))[:contentw]
+        table.append(row)
+
+    title = c(T_TITLE, "Sessions[%d]" % n)
+    if rows < n:  # liste tronquée : indiquer la plage visible
+        title += c(T_DIM, "  %d-%d" % (top + 1, min(top + rows, n)))
+    out += box(title, table, box_w)
+    return "\n".join(out)
+
+
+def oneline(s):
+    return " ".join((s or "").split())
+
+
+def fmt_dur(sec):
+    if sec < 60:
+        return "%ds" % sec
+    if sec < 3600:
+        return "%dm" % (sec // 60)
+    return "%dh%02d" % (sec // 3600, (sec % 3600) // 60)
+
+
+def parse_ts(s):
+    if not s:
+        return None
+    try:
+        import datetime
+        return datetime.datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
+def text_and_tools(content):
+    """Extrait le texte et compte les appels d'outils d'un content (str ou blocs)."""
+    if isinstance(content, str):
+        return content, 0
+    texts, tools = [], 0
+    if isinstance(content, list):
+        for b in content:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "text":
+                texts.append(b.get("text", ""))
+            elif b.get("type") == "tool_use":
+                tools += 1
+    return " ".join(texts).strip(), tools
+
+
+def build_detail(session):
+    """Métadonnées + résumé condensé des tours de la session (pour la vue détail)."""
+    try:
+        with open(session.get("path")) as f:
+            raw = f.readlines()
+    except Exception:
+        return [c("90", "(transcript unreadable)")]
+
+    turns = []
+    cur = None
+    first_ts = last_ts = None
+    out_total = ctx_now = n_assist = 0
+    model = None
+    for line in raw:
+        if '"assistant"' not in line and '"user"' not in line:
+            continue
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        t = obj.get("type")
+        ts = parse_ts(obj.get("timestamp"))
+        if ts:
+            if first_ts is None:
+                first_ts = ts
+            last_ts = ts
+        msg = obj.get("message") or {}
+        if t == "user":
+            txt, _ = text_and_tools(msg.get("content"))
+            if txt:  # on ignore les tours user qui ne portent qu'un tool_result
+                cur = {"ts": ts, "prompt": txt, "tools": 0, "out": 0, "reply": ""}
+                turns.append(cur)
+        elif t == "assistant":
+            n_assist += 1
+            u = msg.get("usage") or {}
+            out_total += u.get("output_tokens") or 0
+            ctx_now = ((u.get("input_tokens") or 0)
+                       + (u.get("cache_read_input_tokens") or 0)
+                       + (u.get("cache_creation_input_tokens") or 0))
+            if msg.get("model"):
+                model = msg.get("model")
+            txt, tools = text_and_tools(msg.get("content"))
+            if cur is not None:
+                cur["tools"] += tools
+                cur["out"] += u.get("output_tokens") or 0
+                if txt and not cur["reply"]:
+                    cur["reply"] = txt
+
+    dur = fmt_dur(int(last_ts - first_ts)) if (first_ts and last_ts) else "—"
+    mcol1 = [kv("Project", session.get("project") or "—"),
+             kv("Branch", session.get("branch") or "—"),
+             kv("Session", (session.get("sid") or "")[:8])]
+    mcol2 = [kv("Model", short_model(model), 11),
+             kv("Turns", len(turns), 11),
+             kv("Asst msgs", n_assist, 11)]
+    mcol3 = [kv("Context", fmt_tokens(ctx_now), 11),
+             kv("Generated", fmt_tokens(out_total), 11),
+             kv("Duration", dur, 11)]
+    lines = [c(T_LOGO, session.get("title", "") or "(untitled)"), ""]
+    lines += side_by_side([mcol1, mcol2, mcol3])
+    lines += ["", c(T_HDR, "CONVERSATION TURNS")]
+    for i, trn in enumerate(turns, 1):
+        hh = time.strftime("%H:%M", time.localtime(trn["ts"])) if trn["ts"] else "--:--"
+        lines.append(c(T_KEY, "%3d." % i) + " " + c(T_DIM, hh) + "  "
+                     + c(T_VAL, trunc(oneline(trn["prompt"]), 110)))
+        meta = []
+        if trn["out"]:
+            meta.append("%s tok" % fmt_tokens(trn["out"]))
+        if trn["tools"]:
+            meta.append("%d tool(s)" % trn["tools"])
+        sub = "      " + c(T_DIM, " · ".join(meta))
+        if trn["reply"]:
+            sub += c(T_DIM, "  →  " + trunc(oneline(trn["reply"]), 90))
+        if meta or trn["reply"]:
+            lines.append(sub)
+    return lines
+
+
+def render_detail(lines, scroll, session):
+    term = shutil.get_terminal_size((120, 40))
+    height = max(3, term.lines - 6)
+    total = len(lines)
+    scroll = max(0, min(scroll, max(0, total - height)))
+    head = [
+        c(T_LOGO, "Session detail"),
+        "   ".join([hk("<↑↓>", "scroll"), hk("<PgUp/Dn>", "page", 11),
+                    hk("<g/G>", "top/bottom"), hk("<Esc>", "back"),
+                    hk("<q>", "quit")]),
+        "",
+    ]
+    window = lines[scroll:scroll + height]
+    pos = ("%d–%d / %d" % (scroll + 1, min(scroll + height, total), total)) if total else "0"
+    return "\n".join(head + window + ["", c(T_DIM, pos)]), scroll
+
+
+def render_kill(ctx):
+    """Écran de fermeture : choix du process à tuer (SIGTERM) puis confirmation.
+    `ctx` = {sess, cands, sel, denied, result?}."""
+    s = ctx["sess"]
+    lines = [c(T_LOGO, "Fermer une session — SIGTERM"), "",
+             kv("Project", s.get("project") or "—"),
+             kv("Title", trunc(s.get("title") or "—", 60)),
+             kv("Cwd", s.get("cwd") or "—"),
+             kv("Session", (s.get("sid") or "")[:8]), ""]
+
+    res = ctx.get("result")
+    if res:
+        kind, info = res
+        if kind == "ok":
+            lines.append(c(T_GREEN, "✓ SIGTERM envoyé au PID %s." % info))
+            lines.append(c(T_DIM, "La session passera en ○ idle au prochain refresh "
+                                  "(le transcript reste sur disque)."))
+        elif kind == "gone":
+            lines.append(c(T_YELLOW, "Le PID %s n'existait déjà plus." % info))
+        else:
+            lines.append(c(T_RED, "Échec : %s" % info))
+        lines += ["", "   ".join([hk("<Esc>", "retour"), hk("<q>", "quit")])]
+        return "\n".join(lines)
+
+    if ctx.get("denied"):
+        lines.append(c(T_RED, "/proc inaccessible — impossible d'identifier le process."))
+        lines += ["", "   ".join([hk("<Esc>", "retour"), hk("<q>", "quit")])]
+        return "\n".join(lines)
+
+    cands = ctx["cands"]
+    if not cands:
+        lines.append(c(T_YELLOW, "Aucun process claude vivant pour cette session."))
+        lines.append(c(T_DIM, "Elle est déjà terminée — rien à tuer "
+                              "(le transcript reste sur disque)."))
+        lines += ["", "   ".join([hk("<Esc>", "retour"), hk("<q>", "quit")])]
+        return "\n".join(lines)
+
+    if len(cands) == 1:
+        lines.append(c(T_VAL, "1 process trouvé pour ce dossier :"))
+    else:
+        lines.append(c(T_YELLOW, "%d process tournent dans ce dossier — "
+                       "choisis lequel fermer :" % len(cands)))
+    lines.append("")
+    now = time.time()
+    for i, p in enumerate(cands):
+        mark = c(T_ACTIVE, "▸ ") if i == ctx["sel"] else "  "
+        age = fmt_age(now - p["started"]) if p.get("started") else "—"
+        tags = []
+        if p.get("entrypoint"):
+            tags.append(p["entrypoint"])
+        if p.get("resume_id"):
+            tags.append("resume:" + p["resume_id"][:8])
+        tag = c(T_DIM, "  " + " · ".join(tags)) if tags else ""
+        reliable = c(T_GREEN, "  ✓ lien fiable") \
+            if p.get("resume_id") == s.get("sid") else ""
+        lines.append(mark + "PID " + c(T_VAL, str(p["pid"]))
+                     + c(T_DIM, "   âge ") + age + tag + reliable)
+    lines += ["", "   ".join([hk("<↑↓>", "choisir"), hk("<y>", "fermer (SIGTERM)"),
+                              hk("<Esc>", "annuler"), hk("<q>", "quit")])]
+    return "\n".join(lines)
+
+
+def read_key(timeout):
+    """Lit une touche. Retourne 'UP'/'DOWN'/'ENTER'/'ESC'/'PGUP'/… ou le caractère.
+    None si le délai expire. Distingue Esc seul d'une séquence de flèche."""
+    r, _, _ = select.select([sys.stdin], [], [], timeout)
+    if not r:
+        return None
+    ch = os.read(sys.stdin.fileno(), 1)
+    if ch in (b"\r", b"\n"):
+        return "ENTER"
+    if ch != b"\x1b":
+        try:
+            return ch.decode("utf-8", "ignore")
+        except Exception:
+            return ""
+    # Octet d'échappement : séquence (flèche, PgUp…) ou Esc seul si rien ne suit.
+    r2, _, _ = select.select([sys.stdin], [], [], 0.02)
+    if not r2:
+        return "ESC"
+    seq = os.read(sys.stdin.fileno(), 32).decode("latin1", "ignore")
+    if seq.startswith("[<"):  # événement souris SGR (1006) : "[<b;col;row(M|m)"
+        try:
+            button = int(seq[2:].split(";")[0])
+        except ValueError:
+            return None
+        if button == 64:
+            return "MUP"      # molette vers le haut
+        if button == 65:
+            return "MDOWN"    # molette vers le bas
+        return None           # clic ou autre événement souris : ignoré
+    return {
+        "[A": "UP", "[B": "DOWN", "[C": "RIGHT", "[D": "LEFT",
+        "OA": "UP", "OB": "DOWN", "OC": "RIGHT", "OD": "LEFT",
+        "[5~": "PGUP", "[6~": "PGDN",
+        "[H": "HOME", "[F": "END", "[1~": "HOME", "[4~": "END",
+    }.get(seq, "ESC")
+
+
+def parse_args(argv):
+    opts = {"once": False, "all": False, "full": False, "hide_idle": False,
+            "interval": 60, "ctx_max": 200000}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("--once", "-1"):
+            opts["once"] = True
+        elif a in ("--all", "-a"):
+            opts["all"] = True
+        elif a in ("--full", "-f"):
+            opts["full"] = True
+        elif a == "--hide-idle":
+            opts["hide_idle"] = True
+        elif a in ("--interval", "-n") and i + 1 < len(argv):
+            try:
+                opts["interval"] = max(2, int(argv[i + 1]))
+            except ValueError:
+                pass
+            i += 1
+        elif a == "--ctx-max" and i + 1 < len(argv):
+            try:
+                opts["ctx_max"] = max(1000, int(argv[i + 1]))
+            except ValueError:
+                pass
+            i += 1
+        elif a in ("--help", "-h"):
+            print(__doc__)
+            sys.exit(0)
+        i += 1
+    return opts
+
+
+def _kitty_focus(sock, match):
+    """Tente `kitty @ focus-window` sur l'instance `sock` avec le critère `match`.
+    Renvoie True seulement si une fenêtre a été trouvée et focus (returncode 0)."""
+    if not sock:
+        return False
+    if not sock.startswith("unix:"):
+        sock = "unix:" + sock
+    try:
+        r = subprocess.run(["kitty", "@", "--to", sock, "focus-window", "--match", match],
+                           timeout=5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def focus_or_open(sess):
+    """Focus la fenêtre kitty de la session ; sinon ouvre une reprise personnifiée.
+
+    1) binding enregistré (mx_socket + mx_window) ; 2) à défaut, découverte parmi
+    les instances kitty en matchant le titre (nom d'agent) puis le cwd ; 3) sinon,
+    reprise dans une nouvelle fenêtre."""
+    agent, cwd = sess.get("agent"), sess.get("cwd")
+    if sess.get("mx_window") and _kitty_focus(sess.get("mx_socket"), "id:%s" % sess["mx_window"]):
+        return
+    criteria = []
+    if agent:
+        criteria.append("title:%s" % agent)
+    if cwd:
+        criteria.append("cwd:%s" % cwd)
+    for sock in glob.glob("/tmp/kitty-*"):
+        for match in criteria:
+            if _kitty_focus(sock, match):
+                return
+    try:
+        subprocess.Popen(["kitty", "--directory", cwd or os.path.expanduser("~"),
+                          "zsh", "-ic", "matrix resume %s" % sess["sid"]],
+                         start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
+def run_live(opts):
+    show_all = opts["all"]
+    full = opts["full"]
+    hide_idle = opts["hide_idle"]
+    paused = False
+    sort_mode = 0
+    sel = 0
+    ctx_max = opts["ctx_max"]
+    query = ""            # filtre actif
+    searching = False     # saisie du filtre en cours
+    resume_target = None  # session à reprendre en quittant (claude --resume)
+    kill_ctx = None       # contexte de l'écran de fermeture (SIGTERM)
+
+    if not sys.stdin.isatty():  # non interactif (pipe, watch…) : refresh simple
+        while True:
+            sys.stdout.write("\033[H\033[J")
+            s = drop_idle(sort_sessions(collect(show_all, with_tokens=full), sort_mode),
+                          hide_idle)
+            sys.stdout.write(render(s, show_all, paused=False,
+                             interval=opts["interval"], full=full,
+                             sort_mode=sort_mode, ctx_max=ctx_max,
+                             hide_idle=hide_idle) + "\n")
+            sys.stdout.flush()
+            time.sleep(opts["interval"])
+        return
+
+    def need_tokens():
+        return full or sort_mode in (1, 2)
+
+    def refresh():
+        return sort_sessions(collect(show_all, with_tokens=need_tokens()), sort_mode)
+
+    old = termios.tcgetattr(sys.stdin)
+    tty.setcbreak(sys.stdin.fileno())
+    # Écran alterné (comme k9s/top/vim) : ne pollue pas le scrollback, et restitue
+    # le terminal intact à la sortie. + curseur masqué + tracking molette (SGR 1006).
+    sys.stdout.write("\033[?1049h\033[?25l\033[?1000h\033[?1006h")
+    screen = "list"
+    detail = None
+    detail_lines = []
+    scroll = 0
+    top = 0
+    sessions = refresh()
+    try:
+        while True:
+            if screen == "list":
+                view = drop_idle([s for s in sessions if matches(s, query)], hide_idle)
+                if sel >= len(view):
+                    sel = max(0, len(view) - 1)
+                # Fenêtre de scroll : garder la ligne sélectionnée visible.
+                extra = 1 if (searching or query) else 0
+                rows = list_capacity(shutil.get_terminal_size((120, 40)).lines, paused, extra)
+                if sel < top:
+                    top = sel
+                elif sel >= top + rows:
+                    top = sel - rows + 1
+                top = max(0, min(top, max(0, len(view) - rows)))
+                sys.stdout.write("\033[H\033[J")
+                sys.stdout.write(render(view, show_all, paused=paused,
+                                 interval=opts["interval"], full=full, sel=sel,
+                                 sort_mode=sort_mode, ctx_max=ctx_max, top=top,
+                                 query=query, searching=searching,
+                                 hide_idle=hide_idle) + "\n")
+                sys.stdout.flush()
+                k = read_key(None if (paused or searching) else opts["interval"])
+                if k is None:           # timeout → auto-refresh
+                    sessions = refresh()
+                    continue
+                if searching:           # saisie du filtre en cours
+                    if k == "ENTER":
+                        searching = False
+                    elif k == "ESC":
+                        searching, query = False, ""
+                    elif k in ("\x7f", "\x08"):     # backspace
+                        query = query[:-1]
+                    elif len(k) == 1 and k.isprintable():
+                        query += k
+                    sel = 0
+                    continue
+                if k in ("q", "Q"):
+                    break
+                elif k == "/":
+                    searching, sel = True, 0
+                elif k == "R" and view:
+                    resume_target = view[sel]
+                    break
+                elif k in ("o", "O") and view:
+                    detail = view[sel]
+                    detail_lines = build_detail(detail)
+                    scroll = 0
+                    screen = "detail"
+                elif k == "\x0b" and view:   # Ctrl+K
+                    sess = view[sel]
+                    procs = claude_procs()
+                    kill_ctx = {"sess": sess, "cands": kill_candidates(sess, procs) or [],
+                                "sel": 0, "denied": procs is None}
+                    screen = "kill"
+                elif k in ("UP", "k", "K"):
+                    sel = max(0, sel - 1)
+                elif k in ("DOWN", "j", "J"):
+                    sel = min(len(view) - 1, sel + 1) if view else 0
+                elif k == "PGUP":
+                    sel = max(0, sel - rows)
+                elif k == "PGDN":
+                    sel = min(len(view) - 1, sel + rows) if view else 0
+                elif k == "MUP":
+                    sel = max(0, sel - 3)
+                elif k == "MDOWN":
+                    sel = min(len(view) - 1, sel + 3) if view else 0
+                elif k in ("g", "HOME"):
+                    sel = 0
+                elif k in ("G", "END"):
+                    sel = (len(view) - 1) if view else 0
+                elif k == "0":
+                    show_all = not show_all
+                    sessions = refresh()
+                    sel = 0
+                elif k in ("i", "I"):
+                    hide_idle = not hide_idle
+                    sel = 0
+                elif k in ("t", "T"):
+                    full = not full
+                    sessions = refresh()
+                elif k in ("s", "S"):
+                    sort_mode = (sort_mode + 1) % 3
+                    sessions = refresh()
+                    sel = 0
+                elif k in ("p", "P"):
+                    paused = not paused
+                elif k == "r":
+                    sessions = refresh()
+                elif k == "ENTER" and view:
+                    focus_or_open(view[sel])
+            elif screen == "kill":  # écran de fermeture : refresh suspendu
+                sys.stdout.write("\033[H\033[J")
+                sys.stdout.write(render_kill(kill_ctx) + "\n")
+                sys.stdout.flush()
+                k = read_key(None)
+                cands = kill_ctx["cands"]
+                if kill_ctx.get("result"):       # action faite : seule sortie possible
+                    if k in ("ESC", "LEFT"):
+                        screen = "list"
+                    elif k in ("q", "Q"):
+                        break
+                elif k in ("ESC", "LEFT"):
+                    screen = "list"
+                elif k in ("q", "Q"):
+                    break
+                elif cands and k in ("UP", "k", "K"):
+                    kill_ctx["sel"] = max(0, kill_ctx["sel"] - 1)
+                elif cands and k in ("DOWN", "j", "J"):
+                    kill_ctx["sel"] = min(len(cands) - 1, kill_ctx["sel"] + 1)
+                elif cands and k in ("y", "Y", "ENTER"):
+                    target = cands[kill_ctx["sel"]]
+                    try:
+                        os.kill(target["pid"], signal.SIGTERM)
+                        kill_ctx["result"] = ("ok", target["pid"])
+                    except ProcessLookupError:
+                        kill_ctx["result"] = ("gone", target["pid"])
+                    except Exception as e:
+                        kill_ctx["result"] = ("err", str(e))
+                    sessions = refresh()
+            else:  # vue détail : refresh suspendu
+                sys.stdout.write("\033[H\033[J")
+                content, scroll = render_detail(detail_lines, scroll, detail)
+                sys.stdout.write(content + "\n")
+                sys.stdout.flush()
+                k = read_key(None)
+                if k in ("ESC", "LEFT"):
+                    screen = "list"
+                elif k in ("q", "Q"):
+                    break
+                elif k in ("UP", "k", "K"):
+                    scroll -= 1
+                elif k in ("DOWN", "j", "J"):
+                    scroll += 1
+                elif k == "PGUP":
+                    scroll -= 10
+                elif k == "PGDN":
+                    scroll += 10
+                elif k == "MUP":
+                    scroll -= 3
+                elif k == "MDOWN":
+                    scroll += 3
+                elif k in ("g", "HOME"):
+                    scroll = 0
+                elif k in ("G", "END"):
+                    scroll = 10 ** 9
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # Coupe le tracking souris, réaffiche le curseur, quitte l'écran alterné.
+        sys.stdout.write("\033[?1000l\033[?1006l\033[?25h\033[?1049l")
+        sys.stdout.flush()
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old)
+
+    # Reprise demandée : on remplace ccs par `claude --resume <id>` dans le cwd de la session.
+    if resume_target:
+        cwd = resume_target.get("cwd")
+        if cwd and os.path.isdir(cwd):
+            try:
+                os.chdir(cwd)
+            except Exception:
+                pass
+        print("Reprise de la session %s…" % resume_target["sid"][:8])
+        try:
+            os.execvp("claude", ["claude", "--resume", resume_target["sid"]])
+        except Exception as e:
+            print("Échec : %s" % e)
+
+
+def main():
+    opts = parse_args(sys.argv[1:])
+    if opts["once"]:
+        sessions = drop_idle(
+            sort_sessions(collect(opts["all"], with_tokens=opts["full"]), 0),
+            opts["hide_idle"])
+        print(render(sessions, opts["all"], full=opts["full"],
+                     ctx_max=opts["ctx_max"], hide_idle=opts["hide_idle"]))
+    else:
+        run_live(opts)
+
+
+if __name__ == "__main__":
+    main()
