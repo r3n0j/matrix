@@ -133,9 +133,10 @@ def _visible_rows():
         return 15
 
 
-def select(items, render, filter_key, header, hint):
+def select(items, render, filter_key, quote, subhead, hint):
     """Sélecteur interactif : renvoie l'item choisi, None si annulé, NOTTY si pas de TTY.
 
+    En-tête sur 3 lignes : `quote` (réplique, seule), ligne vide, puis `subhead` + compteur.
     `render(item, selected)` -> ligne affichée ; `filter_key(item)` -> texte filtrable."""
     try:
         fh = open("/dev/tty", "r+b", buffering=0)
@@ -165,7 +166,7 @@ def select(items, render, filter_key, header, hint):
         write("\x1b[?25l")
         start_row = _cursor_row(fd)
         if start_row is not None:
-            height = 3 + min(len(items), rows)
+            height = 5 + min(len(items), rows)
             try:
                 screen = os.get_terminal_size().lines
             except OSError:
@@ -190,7 +191,8 @@ def select(items, render, filter_key, header, hint):
             write("\x1b[J")
 
             count_label = "%d/%d" % (len(shown), len(items))
-            lines = ["%s  %s(%s)%s" % (header, DIM, count_label, RESET)]
+            head = [quote, "", "%s  %s(%s)%s" % (subhead, DIM, count_label, RESET)]
+            lines = list(head)
             for i, it in enumerate(view):
                 selected = (top + i) == idx
                 marker = "%s▶%s " % (BRIGHT, RESET) if selected else "  "
@@ -221,9 +223,9 @@ def select(items, render, filter_key, header, hint):
                 if shown:
                     idx = min(len(shown) - 1, max(0, idx + key[1]))
             elif isinstance(key, tuple) and key[0] == "click" and start_row is not None:
-                clicked = top + (key[1] - start_row - 1)  # ligne écran -> index item
-                if 0 <= key[1] - start_row - 1 < len(view):
-                    return shown[clicked]
+                view_index = key[1] - start_row - len(head)  # ligne écran -> index item
+                if 0 <= view_index < len(view):
+                    return shown[top + view_index]
             elif isinstance(key, str) and len(key) == 1 and key.isprintable():
                 query, idx = query + key, 0
     finally:
@@ -280,9 +282,10 @@ def choose_repo():
     def fkey(it):
         return "~ user home défaut default" if it is USER_HOME else it["repo"]
 
-    header = "%sNouvelle session%s — choisis un repo" % (BRIGHT, RESET)
-    hint = "↑↓ · tape pour filtrer · ⏎ · Échap = user"
-    choice = select(items, render, fkey, header, hint)
+    quote = '%s"Guns. Lots of guns."%s' % (GREEN, RESET)
+    subhead = "%schoisis un repo%s" % (BRIGHT, RESET)
+    hint = "↑↓ · tape pour filtrer · clic · ⏎ · Échap = user"
+    choice = select(items, render, fkey, quote, subhead, hint)
     if choice is NOTTY:
         return choose_repo_fallback(repos)
     if choice is None or choice is USER_HOME:
@@ -329,9 +332,10 @@ def main():
             return "nouvelle session new nouveau"
         return " ".join([it.get("project") or "", it.get("agent") or "", it.get("label") or ""])
 
-    header = "%sThe Matrix has you…%s  choisis ta réalité" % (GREEN, RESET)
-    hint = "↑↓ · tape pour filtrer · ⏎ · Échap = nouvelle"
-    choice = select(items, render, fkey, header, hint)
+    quote = "%sThe Matrix has you…%s" % (GREEN, RESET)
+    subhead = "%schoisis ta réalité%s" % (BRIGHT, RESET)
+    hint = "↑↓ · tape pour filtrer · clic · ⏎ · Échap = nouvelle"
+    choice = select(items, render, fkey, quote, subhead, hint)
 
     if choice is NOTTY:
         return main_fallback(sessions, now)
