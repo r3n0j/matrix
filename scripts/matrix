@@ -27,6 +27,19 @@ BRIGHT = "\033[92m"
 RESET = "\033[0m"
 
 
+def extract_name(args):
+    """Valeur d'un `--name`/`-n`/`--name=` dans les args passthrough, ou None."""
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("--name", "-n") and i + 1 < len(args):
+            return args[i + 1]
+        if a.startswith("--name="):
+            return a.split("=", 1)[1]
+        i += 1
+    return None
+
+
 def kitty_extra():
     out = {}
     for key, env in (("kitty_window_id", "KITTY_WINDOW_ID"),
@@ -80,15 +93,15 @@ def main():
     entry = m.register(sid, cwd, agent=keep_agent, **kitty_extra())
     agent = entry["agent"] if entry else "Nobody"
 
-    # Pas de --name : on ne nomme PAS la session d'après le persona (sinon le picker
-    # /resume liste des « Agent Smith » indistincts). Le persona vit dans state.json ;
-    # Claude garde son titre auto (ai-title) comme nom de session → sujet visible.
+    # On ne nomme jamais la session d'après le persona (sinon le picker /resume liste
+    # des « Agent Smith » indistincts). Un --name explicite (fourni par redpill) est en
+    # revanche honoré : passé à claude via passthrough et repris pour le titre de fenêtre.
     if resume_uuid:
         claude_args = ["claude", "--resume", sid] + passthrough
     else:
         claude_args = ["claude", "--session-id", sid] + passthrough
 
-    label = m.session_label(sid, cwd)
+    label = extract_name(passthrough) or m.session_label(sid, cwd)
     win_title = ("%s — %s" % (agent, label)) if label else agent
 
     if os.environ.get("MATRIX_DRY_RUN"):

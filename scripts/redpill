@@ -293,13 +293,31 @@ def choose_repo():
     return os.path.join(REPOS, choice["repo"])
 
 
+def ask_name():
+    """Demande un nom de session optionnel (renommera la fenêtre et sera passé à claude).
+
+    Renvoie le nom saisi ou None (Entrée = nom auto d'après le sujet, comportement historique)."""
+    sys.stderr.write("\n%s\"There is no spoon.\"%s %snomme ta session%s\n" % (GREEN, RESET, BRIGHT, RESET))
+    try:
+        raw = input("%sredpill%s > nom (Entrée = auto) : " % (GREEN, RESET)).strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    return raw or None
+
+
+def matrix_argv(name):
+    """Argv du lanceur matrix pour une nouvelle session, avec nom optionnel."""
+    return ["matrix", "--name", name] if name else ["matrix"]
+
+
 def new_session():
     target = choose_repo()
+    name = ask_name()
     try:
         os.chdir(target)
     except OSError:
         os.chdir(HOME)
-    os.execvp("matrix", ["matrix"])
+    os.execvp("matrix", matrix_argv(name))
 
 
 def resume_session(s):
