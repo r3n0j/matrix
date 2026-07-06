@@ -211,14 +211,14 @@ def main():
         if "waiting for your input" in detail.lower():
             return
         detail = detail or "Claude attend ta réponse"
-        content = "💊 **Knock, knock.** — _%s_\n%s" % (title, detail)
-        dm = "🔔 **[%s]** _%s_\n%s" % (proj, title, detail)
+        content = "💊 Knock, knock. — %s · %s\n%s" % (proj, title, detail)
+        dm = "🔔 [%s] %s\n%s" % (proj, title, detail)
     else:
         # Claude n'a pas vraiment fini : il attend des tâches lancées en arrière-plan.
         if has_active_background_tasks(payload):
             return
-        content = "☎️ **The path is clear.** — _%s_" % title
-        dm = "✅ **[%s]** _%s_ — traitement terminé" % (proj, title)
+        content = "☎️ The path is clear. — %s · %s" % (proj, title)
+        dm = "✅ [%s] %s — traitement terminé" % (proj, title)
 
     # Route vers le salon Matrix sous l'identité de l'agent ; fallback DM.
     deliver(matrix_entry(payload), content, dm)
