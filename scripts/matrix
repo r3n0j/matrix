@@ -106,10 +106,10 @@ def main():
 
     if os.environ.get("MATRIX_DRY_RUN"):
         print(f"agent   : {agent}")
-        print(f"salon   : #{entry['channel'] if entry else '?'}")
         print(f"window  : {entry.get('kitty_window_id') if entry else '-'}")
         print(f"titre   : {win_title}")
         print(f"cmd     : {' '.join(claude_args)}")
+        m.free(sid)  # dry-run = lecture seule : ne pas laisser une session fantôme tenir un persona
         return
 
     pin_window_title(win_title)

@@ -24,7 +24,7 @@ link() {
 }
 
 echo "Déploiement de The Matrix depuis ${REPO/#$HOME/\~}"
-chmod +x "$REPO"/scripts/matrix "$REPO"/scripts/redpill "$REPO"/scripts/matrix-setup \
+chmod +x "$REPO"/scripts/matrix "$REPO"/scripts/redpill "$REPO"/scripts/matrix-bots \
          "$REPO"/scripts/claude-sessions 2>/dev/null || true
 
 for f in "$REPO"/scripts/*; do link "$f" "$HOME/.claude/scripts/$(basename "$f")"; done
@@ -38,4 +38,4 @@ link "$REPO/scripts/redpill" "$HOME/.local/bin/redpill"
 echo
 echo "Terminé."
 echo "Rappels : hooks à câbler dans ~/.claude/settings.json (Notification/Stop/SessionEnd/SessionStart) ;"
-echo "         Discord = poser ~/.claude/channels/discord/.env (token) puis lancer scripts/matrix-setup."
+echo "         Discord = poser ~/.claude/channels/discord/bots.json (tokens bots-persona) puis lancer scripts/matrix-bots."

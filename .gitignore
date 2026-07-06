@@ -12,3 +12,7 @@ approved/
 *.jpeg
 *.jpg
 *.webp
+
+# Bidirectionnel DM : tokens des bots-persona + Neo (secrets), état plugin par bot
+bots.json
+bots/

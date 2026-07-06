@@ -10,7 +10,6 @@ import json
 import os
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 
 MATRIX_DIR = os.path.expanduser("~/.claude/channels/discord/matrix")
@@ -22,7 +21,10 @@ NOBODY = "Nobody"
 TTL = 6 * 3600  # s : sans SessionEnd, une session libère son persona après ce délai d'inactivité (anti-crash)
 USER_AGENT = "TheMatrix (https://arxcf.com, 1.0)"
 CHUNK = 2000
-AVATAR_STYLE = "personas"  # style DiceBear ; avatar déterministe par nom d'agent
+
+DISCORD_DIR = os.path.dirname(MATRIX_DIR)  # ~/.claude/channels/discord
+BOTS = os.path.join(DISCORD_DIR, "bots.json")
+SYSTEM_BOT = "Neo"  # bot système : cycle de vie + repli des sessions sans bot-persona
 
 
 # ── Config / état ─────────────────────────────────────────────────────────
@@ -306,40 +308,75 @@ def session_label(session_id, cwd, config=None):
     return ai_title or (os.path.basename(cwd.rstrip("/")) if cwd else "")
 
 
-# ── Envoi webhook ───────────────────────────────────────────────────────────
+# ── Bots-persona (Full DM-only) ─────────────────────────────────────────────
 
-def avatar_for(agent, config=None):
-    """URL d'avatar de l'agent : override explicite (config["avatars"]) sinon DiceBear.
-
-    Pour des visuels sur-mesure : renseigner `avatars` dans config.json
-    ({ "Agent Smith": "https://.../smith.jpeg", ... }) — URL publique requise
-    (Discord va chercher l'image côté serveur)."""
-    if not agent:
+def load_bots():
+    """Charge bots.json ({user_id, bots:{<persona>:{token,...}}}) ou None."""
+    try:
+        with open(BOTS) as fh:
+            return json.load(fh)
+    except (IOError, ValueError):
         return None
-    cfg = config if config is not None else (load_config() or {})
-    override = (cfg.get("avatars") or {}).get(agent)
-    if override:
-        return override
-    return "https://api.dicebear.com/9.x/%s/png?seed=%s" % (
-        AVATAR_STYLE, urllib.parse.quote(agent))
 
 
-def post_webhook(url, content, username=None, avatar_url=None):
-    """Poste sur un webhook Discord (chunké > 2000). Renvoie True/False (jamais d'exception)."""
-    if not url or not content:
+def bots_user_id(bots=None):
+    data = bots if bots is not None else load_bots()
+    return (data or {}).get("user_id")
+
+
+def bot_token(persona, bots=None):
+    """Token du bot d'un persona ; repli sur le bot système Neo ; None sinon."""
+    data = bots if bots is not None else load_bots()
+    if not data:
+        return None
+    entries = data.get("bots", {})
+    ent = entries.get(persona) or entries.get(SYSTEM_BOT)
+    return (ent or {}).get("token")
+
+
+# ── API Discord (bot, REST) ──────────────────────────────────────────────────
+
+DISCORD_API = "https://discord.com/api/v10"
+
+
+def _discord_req(token, path, body=None, method="GET"):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(
+        DISCORD_API + path, data=data, method=method,
+        headers={"Authorization": "Bot " + token,
+                 "Content-Type": "application/json",
+                 "User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode())
+
+
+def discord_get(token, path):
+    return _discord_req(token, path, method="GET")
+
+
+def discord_post(token, path, body):
+    return _discord_req(token, path, body=body, method="POST")
+
+
+def dm_send(token, user_id, content):
+    """Envoie un DM à l'utilisateur via le bot (REST). Chunké > 2000.
+
+    Ouvre (ou retrouve) le canal DM puis poste. Jamais d'exception ;
+    renvoie True si tout est parti, False sinon."""
+    if not token or not user_id or not content:
+        return False
+    try:
+        channel_id = discord_post(token, "/users/@me/channels",
+                                  {"recipient_id": user_id}).get("id")
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+    if not channel_id:
         return False
     ok = True
     for i in range(0, len(content), CHUNK):
-        body = {"content": content[i:i + CHUNK]}
-        if username:
-            body["username"] = username
-        if avatar_url:
-            body["avatar_url"] = avatar_url
-        req = urllib.request.Request(
-            url, data=json.dumps(body).encode(), method="POST",
-            headers={"Content-Type": "application/json", "User-Agent": USER_AGENT})
         try:
-            urllib.request.urlopen(req, timeout=10).close()
-        except (urllib.error.URLError, OSError):
+            discord_post(token, "/channels/%s/messages" % channel_id,
+                         {"content": content[i:i + CHUNK]})
+        except (urllib.error.URLError, OSError, ValueError):
             ok = False
     return ok

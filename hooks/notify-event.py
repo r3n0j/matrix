@@ -181,17 +181,17 @@ def matrix_entry(payload):
 
 
 def deliver(entry, content, dm_content):
-    """Route vers le webhook du salon (sous l'identité de l'agent) si dispo, sinon DM."""
-    if entry and entry.get("webhook_url"):
-        try:
-            import matrix_lib
-            agent = entry.get("agent")
-            if matrix_lib.post_webhook(entry["webhook_url"], content, username=agent,
-                                       avatar_url=matrix_lib.avatar_for(agent)):
-                return
-        except Exception:
-            pass
-    send_discord(dm_content)
+    """Full DM-only : DM via le bot du persona (repli Neo). `dm_content` = ultime repli legacy."""
+    try:
+        import matrix_lib
+        agent = (entry or {}).get("agent")
+        token = matrix_lib.bot_token(agent)        # token du persona, sinon Neo
+        user_id = matrix_lib.bots_user_id()
+        if token and user_id and matrix_lib.dm_send(token, user_id, content):
+            return
+    except Exception:
+        pass
+    send_discord(dm_content)  # repli : ancien mécanisme .env si encore présent (sinon no-op)
 
 
 def main():

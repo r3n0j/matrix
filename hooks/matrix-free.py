@@ -29,11 +29,10 @@ def main():
         import matrix_lib
         entry = matrix_lib.free(session_id)
         agent = (entry or {}).get("agent")
-        webhook = (entry or {}).get("webhook_url")
-        if webhook and agent and agent != matrix_lib.NOBODY:
-            matrix_lib.post_webhook(
-                webhook, "☎️ **%s has been unplugged.**" % agent, username="The Matrix",
-                avatar_url=matrix_lib.avatar_for("The Matrix"))
+        token = matrix_lib.bot_token(matrix_lib.SYSTEM_BOT)  # Neo
+        user_id = matrix_lib.bots_user_id()
+        if token and user_id and agent and agent != matrix_lib.NOBODY:
+            matrix_lib.dm_send(token, user_id, "☎️ **%s has been unplugged.**" % agent)
     except Exception:
         pass
 

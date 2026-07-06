@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""matrix-bots — valide les bots-persona et imprime leurs invitations.
+
+Lit ~/.claude/channels/discord/bots.json :
+  { "user_id": "…", "bots": { "Neo": {"token": "…"}, "Agent Smith": {"token": "…"} } }
+
+Pour chaque bot : valide le token, récupère app id + bot user id, et imprime l'URL
+d'invitation (scope bot, permissions 0). Le bot doit être invité sur un serveur partagé
+avec toi pour pouvoir t'envoyer des DM (notifications sortantes). N'écrit RIEN dans bots.json."""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import matrix_lib as m
+
+
+def main():
+    bots = m.load_bots()
+    if not bots:
+        sys.exit("bots.json introuvable ou invalide : %s" % m.BOTS)
+    if not m.bots_user_id(bots):
+        sys.exit("bots.json : champ 'user_id' manquant (cible des DM sortants)")
+
+    for persona, ent in bots.get("bots", {}).items():
+        token = ent.get("token")
+        if not token:
+            print("✗ %-14s : pas de token" % persona)
+            continue
+        try:
+            app = m.discord_get(token, "/oauth2/applications/@me")
+            me = m.discord_get(token, "/users/@me")
+        except Exception as err:
+            print("✗ %-14s : token invalide (%s)" % (persona, err))
+            continue
+        invite = ("https://discord.com/api/oauth2/authorize"
+                  "?client_id=%s&scope=bot&permissions=0" % app.get("id"))
+        print("✓ %-14s  bot=@%s  id=%s" % (persona, me.get("username"), me.get("id")))
+        print("    inviter : %s" % invite)
+
+
+if __name__ == "__main__":
+    main()
