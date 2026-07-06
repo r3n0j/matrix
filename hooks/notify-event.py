@@ -81,28 +81,19 @@ def has_active_background_tasks(payload):
 
 
 def session_title(payload):
-    """Titre lisible de la session = dernier `ai-title` du transcript.
-    Repli sur les 8 premiers caractères du session_id si pas encore généré."""
-    title = None
-    path = payload.get("transcript_path")
-    if path and os.path.exists(path):
-        try:
-            with open(path) as f:
-                for line in f:
-                    line = line.strip()
-                    if '"ai-title"' not in line:
-                        continue
-                    try:
-                        obj = json.loads(line)
-                    except Exception:
-                        continue
-                    if obj.get("type") == "ai-title" and obj.get("aiTitle"):
-                        title = obj["aiTitle"]
-        except Exception:
-            pass
-    if title:
-        return title
+    """Nom lisible de la session via matrix_lib.session_label (nom /rename explicite >
+    ai-title > dossier). Repli sur `session <id>` s'il n'y a ni nom ni titre — le dossier
+    serait redondant avec le repo affiché en ligne 1."""
     sid = payload.get("session_id") or ""
+    cwd = payload.get("cwd") or ""
+    try:
+        import matrix_lib
+        name = matrix_lib.session_label(sid, cwd)
+        folder = os.path.basename(cwd.rstrip("/")) if cwd else ""
+        if name and name != folder:      # un vrai nom (--name / ai-title), pas le dossier
+            return name
+    except Exception:
+        pass
     return ("session " + sid[:8]) if sid else "session"
 
 
