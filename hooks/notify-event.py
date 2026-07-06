@@ -33,8 +33,13 @@ def read_stdin_payload():
 
 
 def project_name(payload):
-    cwd = payload.get("cwd") or os.getcwd()
-    return os.path.basename(cwd.rstrip("/")) or cwd
+    """Repo affiché : `/<repo>` (comme une racine de repo). Dans le dossier user (home),
+    on laisse le nom du dossier tel quel (pas de `/`)."""
+    cwd = (payload.get("cwd") or os.getcwd()).rstrip("/")
+    name = os.path.basename(cwd) or cwd
+    if cwd == HOME.rstrip("/"):
+        return name
+    return "/" + name
 
 
 def is_background_session(payload):
