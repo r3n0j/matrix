@@ -33,7 +33,7 @@ def main():
         user_id = matrix_lib.bots_user_id()
         if token and user_id and agent and agent != matrix_lib.NOBODY:
             repo = (entry or {}).get("repo") or "?"
-            matrix_lib.dm_send(token, user_id, "☎️ Unplugged.\n%s · %s" % (agent, repo))
+            matrix_lib.dm_send(token, user_id, "⏏️ %s · %s\n☎️ Unplugged." % (agent, repo))
     except Exception:
         pass
 

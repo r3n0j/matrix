@@ -206,12 +206,12 @@ def main():
         # Notification d'inactivité (prompt vide), pas une vraie question/permission : on ignore.
         if "waiting for your input" in detail.lower():
             return
-        content = "❓ Knock, knock. 🐇\n%s · %s" % (title, proj)
+        content = "❓ %s · %s\n🐇 Knock, knock." % (title, proj)
     else:
         # Claude n'a pas vraiment fini : il attend des tâches lancées en arrière-plan.
         if has_active_background_tasks(payload):
             return
-        content = "✅ The path is clear. 🕶️\n%s · %s" % (title, proj)
+        content = "✅ %s · %s\n🕶️ The path is clear." % (title, proj)
 
     # Route vers le bot du persona ; fallback DM legacy.
     deliver(matrix_entry(payload), content, content)
