@@ -32,7 +32,8 @@ def main():
         token = matrix_lib.bot_token(matrix_lib.SYSTEM_BOT)  # Neo
         user_id = matrix_lib.bots_user_id()
         if token and user_id and agent and agent != matrix_lib.NOBODY:
-            matrix_lib.dm_send(token, user_id, "☎️ **%s has been unplugged.**" % agent)
+            repo = (entry or {}).get("repo") or "?"
+            matrix_lib.dm_send(token, user_id, "%s · %s\n☎️ Unplugged." % (agent, repo))
     except Exception:
         pass
 
