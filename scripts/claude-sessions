@@ -23,7 +23,8 @@ Options :
 Touches (mode live) :
   ↑↓ / j k        naviguer ; PgUp/PgDn page ; g/G haut/bas
   ⏎               focus la fenêtre kitty de l'agent (sinon reprise dans une nouvelle)
-  n               red pill : ouvre le sélecteur redpill dans une nouvelle fenêtre kitty
+  n / [Red Pill]  red pill : ouvre le sélecteur redpill dans une nouvelle fenêtre kitty
+                  (touche n, ou clic sur le bouton [⏏ Red Pill] de l'en-tête)
   o               ouvrir le détail de la session (métadonnées + tours)
   Esc             revenir à la liste (depuis le détail)
   /               filtrer la liste (projet / titre / prompt) ; Esc efface
@@ -81,6 +82,7 @@ T_GREEN = "38;5;42"
 T_YELLOW = "38;5;214"
 T_RED = "38;5;197"
 T_CURSOR = "38;5;16;48;5;51"   # ligne sélectionnée — noir sur fond aqua
+T_BTN = "1;38;5;16;48;5;197"   # bouton Red Pill — noir gras sur fond rouge
 
 
 def start_of_today():
@@ -599,13 +601,17 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
             opt(not include_agents, "hidden"),
             opt(include_agents, "shown"),
         ]
-        col3a = [hk("<↑↓>", "navigate"), hk("<⏎>", "focus win"), hk("</>", "search"),
-                 hk("<R>", "resume"), hk("<n>", "red pill"), hk("<o>", "detail"),
-                 hk("<^K>", "kill")]
-        col3b = [hk("<s>", "sort"), hk("<t>", "tokens"), hk("<i>", "unplugged"),
-                 hk("<p>", "pause"), hk("<r>", "refresh"), hk("<q>", "quit")]
-        out = [c(T_LOGO, "The Matrix") + c(T_DIM, "   The Matrix has you")]
-        out += side_by_side([col1, col2, col3a, col3b])
+        nav = [c(T_LBL, "Navigation"),
+               hk("<↑↓>", "navigate"), hk("</>", "search"), hk("<s>", "sort"),
+               hk("<t>", "tokens"), hk("<i>", "unplugged")]
+        sess = [c(T_LBL, "Session"),
+                hk("<⏎>", "focus win"), hk("<R>", "resume"), hk("<o>", "detail"),
+                hk("<^K>", "kill")]
+        mtx = [c(T_LBL, "The Matrix"),
+               hk("<p>", "pause"), hk("<r>", "refresh"), hk("<q>", "quit")]
+        out = [c(T_LOGO, "The Matrix") + c(T_DIM, "   The Matrix has you")
+               + "   " + c(T_BTN, RED_PILL_BTN)]
+        out += side_by_side([col1, col2, nav, sess, mtx])
         if searching:  # saisie de filtre en cours
             out.append(c(T_KEY, "/") + c(T_VAL, query) + c(T_ACTIVE, "▌"))
         elif query:    # filtre appliqué
@@ -893,21 +899,36 @@ def read_key(timeout):
         return "ESC"
     seq = os.read(sys.stdin.fileno(), 32).decode("latin1", "ignore")
     if seq.startswith("[<"):  # événement souris SGR (1006) : "[<b;col;row(M|m)"
+        final = seq.strip()[-1] if seq.strip() else ""
         try:
-            button = int(seq[2:].split(";")[0])
-        except ValueError:
+            button, col, row = (int(x) for x in seq[2:].rstrip("Mm").split(";"))
+        except (ValueError, IndexError):
             return None
         if button == 64:
             return "MUP"      # molette vers le haut
         if button == 65:
             return "MDOWN"    # molette vers le bas
-        return None           # clic ou autre événement souris : ignoré
+        if button == 0 and final == "M":   # clic gauche (press) → (col, row) 1-based
+            return ("CLICK", col, row)
+        return None           # relâchement / autre bouton : ignoré
     return {
         "[A": "UP", "[B": "DOWN", "[C": "RIGHT", "[D": "LEFT",
         "OA": "UP", "OB": "DOWN", "OC": "RIGHT", "OD": "LEFT",
         "[5~": "PGUP", "[6~": "PGDN",
         "[H": "HOME", "[F": "END", "[1~": "HOME", "[4~": "END",
     }.get(seq, "ESC")
+
+
+RED_PILL_BTN = "[⏏ Red Pill]"  # bouton souris : lance redpill en nouvelle fenêtre kitty
+
+
+def button_region(screen_str, marker=RED_PILL_BTN):
+    """(row, c0, c1) 1-based du bouton `marker` dans l'écran rendu, ou None."""
+    for i, line in enumerate(screen_str.split("\n")):
+        pos = strip_ansi(line).find(marker)
+        if pos != -1:
+            return (i + 1, pos + 1, pos + 1 + len(marker))
+    return None
 
 
 def parse_args(argv):
@@ -1050,16 +1071,22 @@ def run_live(opts):
                 elif sel >= top + rows:
                     top = sel - rows + 1
                 top = max(0, min(top, max(0, len(view) - rows)))
+                screen_str = render(view, show_all, paused=paused,
+                                    interval=opts["interval"], full=full, sel=sel,
+                                    sort_mode=sort_mode, ctx_max=ctx_max, top=top,
+                                    query=query, searching=searching,
+                                    hide_idle=hide_idle)
                 sys.stdout.write("\033[H\033[J")
-                sys.stdout.write(render(view, show_all, paused=paused,
-                                 interval=opts["interval"], full=full, sel=sel,
-                                 sort_mode=sort_mode, ctx_max=ctx_max, top=top,
-                                 query=query, searching=searching,
-                                 hide_idle=hide_idle) + "\n")
+                sys.stdout.write(screen_str + "\n")
                 sys.stdout.flush()
+                btn = button_region(screen_str)
                 k = read_key(None if (paused or searching) else opts["interval"])
                 if k is None:           # timeout → auto-refresh
                     sessions = refresh()
+                    continue
+                if isinstance(k, tuple) and k[0] == "CLICK":  # seul le bouton Red Pill réagit
+                    if btn and k[2] == btn[0] and btn[1] <= k[1] < btn[2]:
+                        open_redpill()
                     continue
                 if searching:           # saisie du filtre en cours
                     if k == "ENTER":
