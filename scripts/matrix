@@ -21,6 +21,7 @@ import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import matrix_lib as m
+import matrix_logo as logo
 
 GREEN = "\033[32m"
 BRIGHT = "\033[92m"
@@ -51,11 +52,20 @@ def kitty_extra():
 
 
 def intro(agent):
-    sys.stderr.write(f"\n{GREEN}The Matrix has you...{RESET}\n")
-    sys.stderr.write(f"{BRIGHT}You are now {agent}.{RESET}\n\n")
+    if not sys.stderr.isatty():
+        sys.stderr.write(f"\n{GREEN}The Matrix has you...{RESET}\n{BRIGHT}You are now {agent}.{RESET}\n\n")
+        return
+    try:
+        width = os.get_terminal_size(sys.stderr.fileno()).columns
+    except OSError:
+        width = 80
+    left = ["", "",
+            f"{GREEN}The Matrix has you...{RESET}",
+            "",
+            f"{BRIGHT}You are now {agent}.{RESET}"]
+    sys.stderr.write("\n" + "\n".join(logo.overlay_right(left, width)) + "\n\n")
     sys.stderr.flush()
-    if sys.stderr.isatty():
-        time.sleep(0.8)
+    time.sleep(0.8)
 
 
 def pin_window_title(title):

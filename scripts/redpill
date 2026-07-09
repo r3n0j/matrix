@@ -15,7 +15,6 @@ bannière (logo figlet MATRIX + pluie de code katakana) calée en haut à droite
 Sans TTY interactif (sortie redirigée), on retombe sur un menu numéroté simple.
 """
 import os
-import random
 import re
 import select as _select_mod
 import sys
@@ -25,91 +24,27 @@ import tty
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import matrix_lib as m
+import matrix_logo as logo
 
 REPOS = os.path.expanduser("~/Arx/repositories")
 HOME = os.path.expanduser("~")
 GREEN, BRIGHT, DIM, RESET = "\033[32m", "\033[92m", "\033[2m", "\033[0m"
-WHITE, DARK = "\033[97m", "\033[2;32m"
 CRUMB_BG = [28, 34, 40, 46]  # fil d'Ariane : vert sombre → vif (palette 256 couleurs), une teinte par étape
 ARROW = "%s ▸ %s" % (BRIGHT, RESET)  # flèche de progression entre les étapes
 
 NOTTY = object()  # sentinelle : pas de terminal interactif -> fallback appelant
 BACK = object()   # sentinelle : Échap -> retour à l'étape précédente
 
-ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+TOP_ROWS = max(8, logo.BANNER_ROWS)  # hauteur de la zone d'en-tête
 
 
-# ── Bannière : logo figlet + pluie de code katakana ─────────────────────────
-
-FIGLET = [
-    " __  __   _ _____ ___ _____  __",
-    "|  \\/  | /_\\_   _| _ \\_ _\\ \\/ /",
-    "| |\\/| |/ _ \\| | |   /| | >  <",
-]
-LOGO_W = max(len(line) for line in FIGLET)
-RAIN_ROWS = 5
-TOP_ROWS = max(7, len(FIGLET) + RAIN_ROWS)  # hauteur de la zone d'en-tête
-KATA = "ｦｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789"
-
-
-def _vis(s):
-    """Largeur visible (glyphes demi-largeur uniquement -> len après strip ANSI)."""
-    return len(ANSI_RE.sub("", s))
-
-
-def _rain_color(dist):
-    """Contraste tête→traîne : blanc vif, vert vif, vert, vert sombre."""
-    return (WHITE, BRIGHT, GREEN, GREEN, DARK)[min(dist, 4)]
-
-
-def _gen_rain():
-    """Instantané de pluie : colonnes de hauteurs inégales, tête vive. Fixe pour cette exécution."""
-    grid = [[None] * LOGO_W for _ in range(RAIN_ROWS)]
-    for c in range(LOGO_W):
-        if random.random() < 0.4:  # colonnes vides -> bords irréguliers
-            continue
-        head = random.randint(0, RAIN_ROWS - 1)
-        length = random.randint(1, RAIN_ROWS)
-        for k in range(length):
-            r = head - k  # la traîne remonte depuis la tête
-            if 0 <= r < RAIN_ROWS:
-                grid[r][c] = (random.choice(KATA), _rain_color(k))
-    return grid
-
-
-_RAIN = _gen_rain()
-
-
-def _banner_rows():
-    """Lignes du bloc bannière, chacune cadrée à LOGO_W colonnes visibles."""
-    rows = ["%s%s%s" % (BRIGHT, line.ljust(LOGO_W), RESET) for line in FIGLET]
-    for r in range(RAIN_ROWS):
-        cells = []
-        for c in range(LOGO_W):
-            cell = _RAIN[r][c]
-            cells.append(" " if cell is None else "%s%s%s" % (cell[1], cell[0], RESET))
-        rows.append("".join(cells))
-    return rows
-
+# ── Bannière : logo figlet + pluie (module partagé matrix_logo) ─────────────
 
 def build_top_region(crumb_line, quote, subhead_line, width):
     """Zone d'en-tête : texte à gauche (2 marges + réplique/fil d'Ariane/sous-titre
-    espacés), bannière logo+pluie calée en haut à droite. Bannière masquée si le
-    terminal est trop étroit."""
+    espacés), bannière logo+pluie calée en haut à droite."""
     left = ["", "", quote, "", crumb_line, "", "", subhead_line]
-    banner = _banner_rows()
-    n = max(len(left), len(banner))
-    left += [""] * (n - len(left))
-    banner += [""] * (n - len(banner))
-    max_left = max((_vis(x) for x in left), default=0)
-    fits = width >= max_left + LOGO_W + 2
-    out = []
-    for lft, rgt in zip(left, banner):
-        if fits and _vis(rgt):
-            out.append(lft + " " * (width - _vis(lft) - _vis(rgt)) + rgt)
-        else:
-            out.append(lft)
-    return out
+    return logo.overlay_right(left, width)
 
 
 def _chip(label, i):
