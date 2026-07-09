@@ -53,6 +53,9 @@ import termios
 import time
 import tty
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import matrix_logo as logo
+
 PROJECTS = os.path.expanduser("~/.claude/projects")
 
 ACTIVE_MAX = 15       # s : en dessous → actif
@@ -680,6 +683,8 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
     title = c(T_TITLE, "Sessions[%d]" % n)
     if rows < n:  # liste tronquée : indiquer la plage visible
         title += c(T_DIM, "  %d-%d" % (top + 1, min(top + rows, n)))
+    if paused is not None and USE_COLOR:  # logo Matrix calé en haut à droite, remonté d'une ligne
+        out = logo.overlay_right([""] + out, term.columns)
     out += box(title, table, box_w)
     return "\n".join(out)
 
