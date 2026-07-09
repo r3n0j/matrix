@@ -2,14 +2,20 @@
 """redpill — choisis ta réalité : reprendre une session Claude récente, ou en démarrer une.
 
 Menu au lancement (sélecteur interactif : ↑↓ pour naviguer, tape pour filtrer,
-Entrée pour valider, Échap pour annuler) :
+Entrée pour valider) :
   - liste des sessions récentes → sélection directe = reprise personnifiée
     (`matrix resume <uuid>` dans le dossier de la session) ;
-  - entrée « ＋ nouvelle session… » (ou Échap) = nouvelle session → choix d'un repo.
+  - entrée « ＋ nouvelle session… » = wizard nouvelle session (repo → nom) ;
+  - Échap sur le menu = nouvelle session directe dans le dossier courant.
+
+Le wizard « nouvelle session » affiche un fil d'Ariane des choix précédents et
+Échap y ramène à l'étape précédente (nom → repo → menu). Chaque écran porte une
+bannière (logo figlet MATRIX + pluie de code katakana) calée en haut à droite.
 
 Sans TTY interactif (sortie redirigée), on retombe sur un menu numéroté simple.
 """
 import os
+import random
 import re
 import select as _select_mod
 import sys
@@ -23,9 +29,103 @@ import matrix_lib as m
 REPOS = os.path.expanduser("~/Arx/repositories")
 HOME = os.path.expanduser("~")
 GREEN, BRIGHT, DIM, RESET = "\033[32m", "\033[92m", "\033[2m", "\033[0m"
+WHITE, DARK = "\033[97m", "\033[2;32m"
+CRUMB_BG = [28, 34, 40, 46]  # fil d'Ariane : vert sombre → vif (palette 256 couleurs), une teinte par étape
+ARROW = "%s ▸ %s" % (BRIGHT, RESET)  # flèche de progression entre les étapes
 
 NOTTY = object()  # sentinelle : pas de terminal interactif -> fallback appelant
+BACK = object()   # sentinelle : Échap -> retour à l'étape précédente
 
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+# ── Bannière : logo figlet + pluie de code katakana ─────────────────────────
+
+FIGLET = [
+    " __  __   _ _____ ___ _____  __",
+    "|  \\/  | /_\\_   _| _ \\_ _\\ \\/ /",
+    "| |\\/| |/ _ \\| | |   /| | >  <",
+]
+LOGO_W = max(len(line) for line in FIGLET)
+RAIN_ROWS = 5
+TOP_ROWS = max(7, len(FIGLET) + RAIN_ROWS)  # hauteur de la zone d'en-tête
+KATA = "ｦｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789"
+
+
+def _vis(s):
+    """Largeur visible (glyphes demi-largeur uniquement -> len après strip ANSI)."""
+    return len(ANSI_RE.sub("", s))
+
+
+def _rain_color(dist):
+    """Contraste tête→traîne : blanc vif, vert vif, vert, vert sombre."""
+    return (WHITE, BRIGHT, GREEN, GREEN, DARK)[min(dist, 4)]
+
+
+def _gen_rain():
+    """Instantané de pluie : colonnes de hauteurs inégales, tête vive. Fixe pour cette exécution."""
+    grid = [[None] * LOGO_W for _ in range(RAIN_ROWS)]
+    for c in range(LOGO_W):
+        if random.random() < 0.4:  # colonnes vides -> bords irréguliers
+            continue
+        head = random.randint(0, RAIN_ROWS - 1)
+        length = random.randint(1, RAIN_ROWS)
+        for k in range(length):
+            r = head - k  # la traîne remonte depuis la tête
+            if 0 <= r < RAIN_ROWS:
+                grid[r][c] = (random.choice(KATA), _rain_color(k))
+    return grid
+
+
+_RAIN = _gen_rain()
+
+
+def _banner_rows():
+    """Lignes du bloc bannière, chacune cadrée à LOGO_W colonnes visibles."""
+    rows = ["%s%s%s" % (BRIGHT, line.ljust(LOGO_W), RESET) for line in FIGLET]
+    for r in range(RAIN_ROWS):
+        cells = []
+        for c in range(LOGO_W):
+            cell = _RAIN[r][c]
+            cells.append(" " if cell is None else "%s%s%s" % (cell[1], cell[0], RESET))
+        rows.append("".join(cells))
+    return rows
+
+
+def build_top_region(crumb_line, quote, subhead_line, width):
+    """Zone d'en-tête : texte à gauche (2 marges + réplique/fil d'Ariane/sous-titre
+    espacés), bannière logo+pluie calée en haut à droite. Bannière masquée si le
+    terminal est trop étroit."""
+    left = ["", "", quote, "", crumb_line, "", "", subhead_line]
+    banner = _banner_rows()
+    n = max(len(left), len(banner))
+    left += [""] * (n - len(left))
+    banner += [""] * (n - len(banner))
+    max_left = max((_vis(x) for x in left), default=0)
+    fits = width >= max_left + LOGO_W + 2
+    out = []
+    for lft, rgt in zip(left, banner):
+        if fits and _vis(rgt):
+            out.append(lft + " " * (width - _vis(lft) - _vis(rgt)) + rgt)
+        else:
+            out.append(lft)
+    return out
+
+
+def _chip(label, i):
+    """Étape du fil d'Ariane : teinte de fond selon la position (dégradé de progression)."""
+    bg = CRUMB_BG[min(i, len(CRUMB_BG) - 1)]
+    fg = 15 if bg <= 28 else 0  # blanc sur vert sombre, noir sur vert vif
+    return "\033[38;5;%d;48;5;%dm %s \033[0m" % (fg, bg, label)
+
+
+def _crumbs_line(crumbs):
+    if not crumbs:
+        return ""
+    return ARROW.join(_chip(c, i) for i, c in enumerate(crumbs)) + "%s ▸%s" % (BRIGHT, RESET)
+
+
+# ── Sélecteur interactif (mode raw, stdlib) ─────────────────────────────────
 
 def fmt_age(sec):
     sec = int(sec)
@@ -51,14 +151,12 @@ def list_repos():
         return []
 
 
-# ── Sélecteur interactif (mode raw, stdlib) ─────────────────────────────────
-
 def _parse_mouse(seq):
     """Séquence SGR `<b;col;ligneM/m` -> ('click', ligne) | ('wheel', ±1) | 'other'."""
-    m = re.match(rb"<(\d+);(\d+);(\d+)([Mm])", seq)
-    if not m:
+    mt = re.match(rb"<(\d+);(\d+);(\d+)([Mm])", seq)
+    if not mt:
         return "other"
-    button, _, row, final = int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4)
+    button, row, final = int(mt.group(1)), int(mt.group(3)), mt.group(4)
     if button & 64:
         return "wheel", (1 if button & 1 else -1)
     if (button & 3) == 0 and final == b"M":
@@ -122,21 +220,45 @@ def _cursor_row(fd):
         resp += c
         if c == b"R":
             break
-    m = re.search(rb"\x1b\[(\d+);\d+R", resp)
-    return int(m.group(1)) if m else None
+    mt = re.search(rb"\x1b\[(\d+);\d+R", resp)
+    return int(mt.group(1)) if mt else None
+
+
+def _reserve(fd, need):
+    """Renvoie la ligne d'ancrage après avoir garanti `need` lignes sous le curseur."""
+    row = _cursor_row(fd)
+    if row is None:
+        return None
+    try:
+        screen = os.get_terminal_size().lines
+    except OSError:
+        screen = 24
+    if row - 1 + need > screen:
+        scroll = row - 1 + need - screen
+        os.write(fd, ("\n" * scroll).encode())
+        row -= scroll
+    return row
+
+
+def _term_width():
+    try:
+        return os.get_terminal_size().columns
+    except OSError:
+        return 80
 
 
 def _visible_rows():
     try:
-        return max(3, os.get_terminal_size().lines - 4)
+        return max(3, os.get_terminal_size().lines - TOP_ROWS - 3)
     except OSError:
-        return 15
+        return 12
 
 
-def select(items, render, filter_key, quote, subhead, hint):
-    """Sélecteur interactif : renvoie l'item choisi, None si annulé, NOTTY si pas de TTY.
+def select(items, render, filter_key, crumbs, quote, subhead, hint):
+    """Sélecteur interactif : renvoie l'item choisi, BACK si Échap, None si Ctrl-C,
+    NOTTY si pas de TTY.
 
-    En-tête sur 3 lignes : `quote` (réplique, seule), ligne vide, puis `subhead` + compteur.
+    `crumbs` = fil d'Ariane (segments joints par ` › `) affiché sous la réplique.
     `render(item, selected)` -> ligne affichée ; `filter_key(item)` -> texte filtrable."""
     try:
         fh = open("/dev/tty", "r+b", buffering=0)
@@ -151,6 +273,7 @@ def select(items, render, filter_key, quote, subhead, hint):
     query, idx, top, prev_lines = "", 0, 0, 0
     rows = _visible_rows()
     start_row, mouse = None, False
+    crumb_line = _crumbs_line(crumbs)
 
     def write(s):
         os.write(fd, s.encode())
@@ -164,17 +287,8 @@ def select(items, render, filter_key, quote, subhead, hint):
     try:
         tty.setraw(fd)
         write("\x1b[?25l")
-        start_row = _cursor_row(fd)
+        start_row = _reserve(fd, TOP_ROWS + 2 + min(len(items), rows))
         if start_row is not None:
-            height = 5 + min(len(items), rows)
-            try:
-                screen = os.get_terminal_size().lines
-            except OSError:
-                screen = 24
-            if start_row - 1 + height > screen:  # réserve la place (évite un scroll qui casse l'ancre)
-                scroll = start_row - 1 + height - screen
-                write("\n" * scroll)
-                start_row -= scroll
             write("\x1b[?1000h\x1b[?1006h")  # reporting souris (clic + SGR)
             mouse = True
         while True:
@@ -191,8 +305,8 @@ def select(items, render, filter_key, quote, subhead, hint):
             write("\x1b[J")
 
             count_label = "%d/%d" % (len(shown), len(items))
-            head = [quote, "", "%s  %s(%s)%s" % (subhead, DIM, count_label, RESET)]
-            lines = list(head)
+            subhead_line = "%s  %s(%s)%s" % (subhead, DIM, count_label, RESET)
+            lines = build_top_region(crumb_line, quote, subhead_line, _term_width())
             for i, it in enumerate(view):
                 selected = (top + i) == idx
                 marker = "%s▶%s " % (BRIGHT, RESET) if selected else "  "
@@ -207,7 +321,9 @@ def select(items, render, filter_key, quote, subhead, hint):
             prev_lines = len(lines)
 
             key = _read_key(fd)
-            if key in ("ctrl-c", "esc", "eof"):
+            if key == "esc":
+                return BACK
+            if key in ("ctrl-c", "eof"):
                 return None
             if key == "enter":
                 if shown:
@@ -223,7 +339,7 @@ def select(items, render, filter_key, quote, subhead, hint):
                 if shown:
                     idx = min(len(shown) - 1, max(0, idx + key[1]))
             elif isinstance(key, tuple) and key[0] == "click" and start_row is not None:
-                view_index = key[1] - start_row - len(head)  # ligne écran -> index item
+                view_index = key[1] - start_row - TOP_ROWS  # ligne écran -> index item
                 if 0 <= view_index < len(view):
                     return shown[top + view_index]
             elif isinstance(key, str) and len(key) == 1 and key.isprintable():
@@ -232,6 +348,62 @@ def select(items, render, filter_key, quote, subhead, hint):
         if mouse:
             write("\x1b[?1000l\x1b[?1006l")
         goto_top()
+        write("\x1b[J\x1b[?25h")
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        fh.close()
+
+
+def prompt_text(crumbs, quote, subhead, hint):
+    """Champ de saisie plein écran (même bannière que `select`).
+
+    Renvoie le texte saisi (`""` si vide), BACK si Échap, None si Ctrl-C, NOTTY si pas de TTY."""
+    try:
+        fh = open("/dev/tty", "r+b", buffering=0)
+    except OSError:
+        return NOTTY
+    fd = fh.fileno()
+    if not os.isatty(fd):
+        fh.close()
+        return NOTTY
+
+    old = termios.tcgetattr(fd)
+    buf, start_row = "", None
+    crumb_line = _crumbs_line(crumbs)
+
+    def write(s):
+        os.write(fd, s.encode())
+
+    try:
+        tty.setraw(fd)
+        write("\x1b[?25l")
+        start_row = _reserve(fd, TOP_ROWS + 4)
+        while True:
+            if start_row is not None:
+                write("\x1b[%d;1H" % start_row)
+            write("\x1b[J")
+            subhead_line = "%s%s%s" % (BRIGHT, subhead, RESET)
+            lines = build_top_region(crumb_line, quote, subhead_line, _term_width())
+            cursor = "\x1b[7m \x1b[0m"
+            lines.append("")
+            lines.append("%sredpill%s > %s%s%s%s" % (GREEN, RESET, GREEN, buf, RESET, cursor))
+            lines.append("")
+            lines.append("%s%s%s" % (DIM, hint, RESET))
+            write("".join(line + "\x1b[K\r\n" for line in lines))
+
+            key = _read_key(fd)
+            if key == "esc":
+                return BACK
+            if key in ("ctrl-c", "eof"):
+                return None
+            if key == "enter":
+                return buf.strip()
+            if key == "backspace":
+                buf = buf[:-1]
+            elif isinstance(key, str) and len(key) == 1 and key.isprintable():
+                buf += key
+    finally:
+        if start_row is not None:
+            write("\x1b[%d;1H" % start_row)
         write("\x1b[J\x1b[?25h")
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
         fh.close()
@@ -264,13 +436,22 @@ def choose_repo_fallback(repos):
                                 else "  plusieurs : " + ", ".join(hits) + "\n") + RESET)
 
 
+def ask_name_fallback():
+    sys.stderr.write("\n%s\"There is no spoon.\"%s %snomme ta session%s\n" % (GREEN, RESET, BRIGHT, RESET))
+    try:
+        raw = input("%sredpill%s > nom (Entrée = auto) : " % (GREEN, RESET)).strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    return raw or None
+
+
 # ── Sélecteurs ──────────────────────────────────────────────────────────────
 
 USER_HOME = {"_user": True}
 
 
-def choose_repo():
-    """Sélecteur de repo (dossier user par défaut). Renvoie le chemin cible."""
+def choose_repo(crumbs):
+    """Sélecteur de repo (dossier user via l'entrée « ~ »). Renvoie un chemin ou BACK."""
     repos = list_repos()
     items = [USER_HOME] + [{"repo": r} for r in repos]
 
@@ -284,25 +465,32 @@ def choose_repo():
 
     quote = '%s"Guns. Lots of guns."%s' % (GREEN, RESET)
     subhead = "%schoisis un repo%s" % (BRIGHT, RESET)
-    hint = "↑↓ · tape pour filtrer · clic · ⏎ · Échap = user"
-    choice = select(items, render, fkey, quote, subhead, hint)
+    hint = "↑↓ · tape pour filtrer · clic · ⏎ · Échap = retour"
+    choice = select(items, render, fkey, crumbs, quote, subhead, hint)
     if choice is NOTTY:
         return choose_repo_fallback(repos)
-    if choice is None or choice is USER_HOME:
+    if choice is BACK:
+        return BACK
+    if choice is None:
+        sys.exit(0)
+    if choice is USER_HOME:
         return HOME
     return os.path.join(REPOS, choice["repo"])
 
 
-def ask_name():
-    """Demande un nom de session optionnel (renommera la fenêtre et sera passé à claude).
-
-    Renvoie le nom saisi ou None (Entrée = nom auto d'après le sujet, comportement historique)."""
-    sys.stderr.write("\n%s\"There is no spoon.\"%s %snomme ta session%s\n" % (GREEN, RESET, BRIGHT, RESET))
-    try:
-        raw = input("%sredpill%s > nom (Entrée = auto) : " % (GREEN, RESET)).strip()
-    except (EOFError, KeyboardInterrupt):
-        return None
-    return raw or None
+def ask_name(crumbs):
+    """Demande un nom de session optionnel. Renvoie le nom, None (auto) ou BACK."""
+    quote = '%s"There is no spoon."%s' % (GREEN, RESET)
+    subhead = "nomme ta session"
+    hint = "⏎ = valider · vide = nom auto · Échap = retour"
+    res = prompt_text(crumbs, quote, subhead, hint)
+    if res is NOTTY:
+        return ask_name_fallback()
+    if res is BACK:
+        return BACK
+    if res is None:
+        sys.exit(0)
+    return res or None
 
 
 def matrix_argv(name):
@@ -310,14 +498,37 @@ def matrix_argv(name):
     return ["matrix", "--name", name] if name else ["matrix"]
 
 
-def new_session():
-    target = choose_repo()
-    name = ask_name()
+def new_session_wizard():
+    """Wizard repo → nom. Renvoie (chemin_cible, nom) à lancer, ou BACK vers le menu."""
+    repo = None
+    step = 0
+    while True:
+        if step == 0:
+            res = choose_repo(["Nouvelle session"])
+            if res is BACK:
+                return BACK
+            repo = res
+            step = 1
+        else:
+            crumb_repo = "~" if repo == HOME else os.path.basename(repo)
+            res = ask_name(["Nouvelle session", crumb_repo])
+            if res is BACK:
+                step = 0
+                continue
+            return repo, res
+
+
+def launch_new(target, name):
     try:
         os.chdir(target)
     except OSError:
         os.chdir(HOME)
     os.execvp("matrix", matrix_argv(name))
+
+
+def launch_new_cwd():
+    """Nouvelle session dans le dossier courant, sans étape de choix."""
+    os.execvp("matrix", ["matrix"])
 
 
 def resume_session(s):
@@ -329,37 +540,49 @@ def resume_session(s):
 def main():
     sessions = m.list_sessions()
     if not sessions:
-        return new_session()
-    now = time.time()
+        res = new_session_wizard()
+        if res is BACK:
+            launch_new_cwd()
+        return launch_new(res[0], res[1])
+
     new_entry = {"_new": True}
-    items = [new_entry] + sessions
+    while True:
+        now = time.time()
+        items = [new_entry] + sessions
 
-    def render(it, selected):
-        if it is new_entry:
-            return "%s＋ nouvelle session…%s" % (BRIGHT, RESET)
-        agent = it.get("agent") or "—"
-        cols = (trunc(it["project"], 14), trunc(agent, 14),
-                trunc(it["label"], 30), fmt_age(now - it["mtime"]))
-        if selected:
-            return "%s%-14s %-14s %-30s (%s)%s" % (BRIGHT, cols[0], cols[1], cols[2], cols[3], RESET)
-        return "%-14s %s%-14s%s %-30s %s(%s)%s" % (
-            cols[0], GREEN, cols[1], RESET, cols[2], DIM, cols[3], RESET)
+        def render(it, selected):
+            if it is new_entry:
+                return "%s＋ nouvelle session…%s" % (BRIGHT, RESET)
+            agent = it.get("agent") or "—"
+            cols = (trunc(it["project"], 14), trunc(agent, 14),
+                    trunc(it["label"], 30), fmt_age(now - it["mtime"]))
+            if selected:
+                return "%s%-14s %-14s %-30s (%s)%s" % (BRIGHT, cols[0], cols[1], cols[2], cols[3], RESET)
+            return "%-14s %s%-14s%s %-30s %s(%s)%s" % (
+                cols[0], GREEN, cols[1], RESET, cols[2], DIM, cols[3], RESET)
 
-    def fkey(it):
-        if it is new_entry:
-            return "nouvelle session new nouveau"
-        return " ".join([it.get("project") or "", it.get("agent") or "", it.get("label") or ""])
+        def fkey(it):
+            if it is new_entry:
+                return "nouvelle session new nouveau"
+            return " ".join([it.get("project") or "", it.get("agent") or "", it.get("label") or ""])
 
-    quote = "%sThe Matrix has you…%s" % (GREEN, RESET)
-    subhead = "%schoisis ta réalité%s" % (BRIGHT, RESET)
-    hint = "↑↓ · tape pour filtrer · clic · ⏎ · Échap = nouvelle"
-    choice = select(items, render, fkey, quote, subhead, hint)
+        quote = "%sThe Matrix has you…%s" % (GREEN, RESET)
+        subhead = "%schoisis ta réalité%s" % (BRIGHT, RESET)
+        hint = "↑↓ · tape pour filtrer · clic · ⏎ · Échap = session ici"
+        choice = select(items, render, fkey, [], quote, subhead, hint)
 
-    if choice is NOTTY:
-        return main_fallback(sessions, now)
-    if choice is None or choice is new_entry:
-        return new_session()
-    resume_session(choice)
+        if choice is NOTTY:
+            return main_fallback(sessions, now)
+        if choice is None:
+            return
+        if choice is BACK:
+            return launch_new_cwd()
+        if choice is new_entry:
+            res = new_session_wizard()
+            if res is BACK:
+                continue
+            return launch_new(res[0], res[1])
+        return resume_session(choice)
 
 
 def main_fallback(sessions, now):
@@ -377,7 +600,7 @@ def main_fallback(sessions, now):
         choice = ""
     if choice.isdigit() and 1 <= int(choice) <= len(sessions):
         resume_session(sessions[int(choice) - 1])
-    new_session()
+    launch_new(choose_repo_fallback(list_repos()), ask_name_fallback())
 
 
 if __name__ == "__main__":
