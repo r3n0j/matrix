@@ -472,6 +472,32 @@ def collect(include_agents, with_tokens=False):
             continue
         s["live"] = bool(resume_ids and s["sid"] in resume_ids)
         sessions.append(s)
+
+    import matrix_lib
+    seen = {s["sid"] for s in sessions}
+    for p in matrix_lib.paused_sessions():
+        if p["sid"] in seen:
+            continue
+        path = matrix_lib.find_transcript(p["sid"])
+        s = parse_session(path, with_tokens=with_tokens) if path else None
+        if s is None:
+            # transcript gone: synthesize a minimal row with SAFE defaults for
+            # every key render()/status()/title_cell() reads.
+            s = {
+                "sid": p["sid"], "path": path, "started": p.get("since"),
+                "background": False, "cwd": p.get("cwd"),
+                "project": p.get("project") or "?", "branch": None,
+                "title": p.get("label") or ("session " + p["sid"][:8]),
+                "last_prompt": "", "last_msg_type": None, "is_agent": False,
+                "entrypoint": None, "custom_name": None,
+                "mtime": p.get("since") or 0, "context_tokens": None,
+                "output_total": 0, "cost": None, "model": None,
+            }
+        if s.get("background") and not include_agents:
+            continue
+        s["live"] = bool(resume_ids and s["sid"] in resume_ids)
+        sessions.append(s)
+
     mx = matrix_state()
     pool = matrix_personas()
     for s in sessions:

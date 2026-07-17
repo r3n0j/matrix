@@ -490,10 +490,11 @@ def main():
     new_entry = {"_new": True}
     while True:
         now = time.time()
-        paused = [s for s in sessions if s.get("paused")]
-        wake_entry = {"_wake": True, "_count": len(paused)}
+        paused_all = m.paused_sessions()
+        paused = [s for s in sessions if s.get("paused")]   # still used for row grouping/markers
+        wake_entry = {"_wake": True, "_count": len(paused_all)}
         sessions_sorted = paused + [s for s in sessions if not s.get("paused")]
-        items = ([wake_entry] if paused else []) + [new_entry] + sessions_sorted
+        items = ([wake_entry] if paused_all else []) + [new_entry] + sessions_sorted
 
         label_w = max(30, _term_width() - 42)
 
