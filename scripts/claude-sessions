@@ -653,10 +653,15 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
                 hk("<w>", "wake"), hk("<o>", "detail"), hk("<^K>", "kill")]
         mtx = [c(T_LBL, "The Matrix"),
                hk("<p>", "pause"), hk("<r>", "refresh"), hk("<q>", "quit")]
-        out = [c(T_LOGO, "The Matrix") + c(T_DIM, "   The Matrix has you")
-               + "   " + c(T_BTN, RED_PILL_BTN) + c(T_DIM, " <n>")
-               + "   " + c(T_BTN, WAKE_BTN) + c(T_DIM, " <W>")]
+        out = [c(T_LOGO, "The Matrix") + c(T_DIM, "   The Matrix has you")]
         out += side_by_side([col1, col2, nav, sess, mtx])
+        # Boutons souris SOUS le bloc colonnes : hors de la zone bannière (BANNER_ROWS
+        # lignes). Les emoji ⏰/💊 sont double-largeur alors que overlay_right/vis
+        # supposent des glyphes demi-largeur ; sur une ligne pairée à une rangée du
+        # logo, ils décaleraient l'alignement (ligne vide au milieu). Ici la ligne
+        # tombe au-delà de la bannière, donc renvoyée telle quelle.
+        out.append(c(T_BTN, RED_PILL_BTN) + c(T_DIM, " <n>")
+                   + "   " + c(T_BTN, WAKE_BTN) + c(T_DIM, " <W>"))
         if searching:  # saisie de filtre en cours
             out.append(c(T_KEY, "/") + c(T_VAL, query) + c(T_ACTIVE, "▌"))
         elif query:    # filtre appliqué
