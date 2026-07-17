@@ -80,5 +80,26 @@ class WaitingPrimitivesTest(StateTestBase):
         self.assertIn("waiting", e)
 
 
+class SidResolutionTest(unittest.TestCase):
+    def test_sid_from_equals_form(self):
+        self.assertEqual(matrix_lib._sid_from_args(["claude", "--session-id=abc"]), "abc")
+
+    def test_sid_from_spaced_resume(self):
+        self.assertEqual(matrix_lib._sid_from_args(["claude", "--resume", "def"]), "def")
+
+    def test_sid_from_short_r(self):
+        self.assertEqual(matrix_lib._sid_from_args(["claude", "-r", "ghi"]), "ghi")
+
+    def test_sid_none_when_absent(self):
+        self.assertIsNone(matrix_lib._sid_from_args(["claude", "--foo"]))
+
+    def test_current_session_id_uses_env(self):
+        os.environ["CLAUDE_SESSION_ID"] = "env-sid"
+        try:
+            self.assertEqual(matrix_lib.current_session_id(), "env-sid")
+        finally:
+            del os.environ["CLAUDE_SESSION_ID"]
+
+
 if __name__ == "__main__":
     unittest.main()

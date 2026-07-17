@@ -87,6 +87,55 @@ def live_uuids():
     return found
 
 
+def _sid_from_args(args):
+    """Extrait un session id d'une cmdline claude (--session-id/--resume/-r)."""
+    for i, arg in enumerate(args):
+        for flag in ("--session-id=", "--resume="):
+            if arg.startswith(flag):
+                return arg[len(flag):]
+        if arg in ("--session-id", "--resume", "-r") and i + 1 < len(args):
+            return args[i + 1]
+    return None
+
+
+def _pid_cmdline(pid):
+    try:
+        with open("/proc/%s/cmdline" % pid, "rb") as fh:
+            return [p.decode("utf-8", "replace") for p in fh.read().split(b"\x00") if p]
+    except (IOError, OSError):
+        return []
+
+
+def _pid_ppid(pid):
+    try:
+        with open("/proc/%s/status" % pid) as fh:
+            for line in fh:
+                if line.startswith("PPid:"):
+                    return line.split()[1]
+    except (IOError, OSError):
+        pass
+    return None
+
+
+def current_session_id():
+    """Session id de la session courante : $CLAUDE_SESSION_ID, sinon remontée des
+    PID parents jusqu'au process `claude` (cmdline --session-id/--resume)."""
+    env = os.environ.get("CLAUDE_SESSION_ID")
+    if env:
+        return env
+    pid = str(os.getppid())
+    for _ in range(40):
+        if not pid or pid == "0":
+            break
+        args = _pid_cmdline(pid)
+        if any("claude" in a for a in args):
+            sid = _sid_from_args(args)
+            if sid:
+                return sid
+        pid = _pid_ppid(pid)
+    return None
+
+
 # ── Assignation / routage ───────────────────────────────────────────────────
 
 def _active(entry, now):
@@ -370,6 +419,8 @@ def list_sessions(limit=15, since_days=3, scan_max=40):
         label = rename if (rename and rename not in personas) else (ai or project)
         out.append({"sid": sid, "cwd": cwd, "project": project,
                     "agent": (state.get(sid) or {}).get("agent"),
+                    "paused": (state.get(sid) or {}).get("paused"),
+                    "waiting": (state.get(sid) or {}).get("waiting"),
                     "label": label, "mtime": mtime})
         if len(out) >= limit:
             break
