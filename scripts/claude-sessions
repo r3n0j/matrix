@@ -623,8 +623,8 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
                hk("<↑↓>", "navigate"), hk("</>", "search"), hk("<s>", "sort"),
                hk("<t>", "tokens"), hk("<i>", "unplugged")]
         sess = [c(T_LBL, "Session"),
-                hk("<⏎>", "focus win"), hk("<R>", "resume"), hk("<o>", "detail"),
-                hk("<^K>", "kill")]
+                hk("<⏎>", "focus win"), hk("<R>", "resume"), hk("<z>", "pause"),
+                hk("<w>", "wake"), hk("<o>", "detail"), hk("<^K>", "kill")]
         mtx = [c(T_LBL, "The Matrix"),
                hk("<p>", "pause"), hk("<r>", "refresh"), hk("<q>", "quit")]
         out = [c(T_LOGO, "The Matrix") + c(T_DIM, "   The Matrix has you")
@@ -1036,6 +1036,19 @@ def open_redpill():
         pass
 
 
+def toggle_pause(sess):
+    """Bascule le flag paused de la session. Auto-note : waiting.message si présent,
+    sinon dernier prompt/titre. (Édition inline non couverte ici — v1 : note auto.)"""
+    import matrix_lib
+    sid = sess["sid"]
+    if sess.get("paused"):
+        matrix_lib.clear_paused(sid)
+        return
+    w = sess.get("waiting") or {}
+    note = w.get("message") or sess.get("last_prompt") or sess.get("title") or ""
+    matrix_lib.set_paused(sid, note=note, cwd=sess.get("cwd"))
+
+
 def run_live(opts):
     show_all = opts["all"]
     full = opts["full"]
@@ -1128,6 +1141,14 @@ def run_live(opts):
                 elif k == "R" and view:
                     resume_target = view[sel]
                     break
+                elif k == "z" and view:
+                    toggle_pause(view[sel])
+                    sessions = refresh()
+                elif k == "w" and view:
+                    import matrix_lib
+                    focus_or_open(view[sel])
+                    matrix_lib.clear_paused(view[sel]["sid"])
+                    sessions = refresh()
                 elif k in ("n", "N"):
                     open_redpill()
                 elif k in ("o", "O") and view:
