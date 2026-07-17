@@ -582,8 +582,8 @@ def ctx_cell(n, ctx_max):
 
 
 def state_marker(s):
-    """Marqueur combiné de la colonne d'état : ⏸ (paused), ❓ (waiting), les deux, ou vide."""
-    return ("⏸" if s.get("paused") else "") + ("❓" if s.get("waiting") else "")
+    """Marqueur combiné de la colonne d'état : ‖ (paused), ? (waiting), les deux, ou vide."""
+    return ("‖" if s.get("paused") else "") + ("?" if s.get("waiting") else "")
 
 
 def state_last_age(s, now):
@@ -641,10 +641,10 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
 
     # ---- Tableau encadré. MODEL toujours affiché ; LAST PROMPT prend le reste. ----
     if full:
-        fixed = [("PROJECT", 16), ("STATUS", 16), ("AGENT", 15), ("HOST", 7), ("⏸", 3), ("TITLE", 16), ("LAST", 6),
+        fixed = [("PROJECT", 16), ("STATUS", 16), ("AGENT", 15), ("HOST", 7), ("‖?", 3), ("TITLE", 16), ("LAST", 6),
                  ("AGE", 6), ("CTX", 6), ("OUT", 6), ("COST", 7), ("MODEL", 12)]
     else:
-        fixed = [("PROJECT", 16), ("STATUS", 16), ("AGENT", 15), ("HOST", 7), ("⏸", 3), ("TITLE", 26), ("LAST", 6),
+        fixed = [("PROJECT", 16), ("STATUS", 16), ("AGENT", 15), ("HOST", 7), ("‖?", 3), ("TITLE", 26), ("LAST", 6),
                  ("AGE", 6), ("MODEL", 12)]
     sep = 2
     box_w = term.columns
