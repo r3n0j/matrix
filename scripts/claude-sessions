@@ -5,41 +5,42 @@ Lit ~/.claude/projects/**/*.jsonl, ne garde que les transcripts modifiés
 aujourd'hui. Affiche project / status / title / last activity / model / prompt.
 LAST = temps écoulé depuis la dernière interaction (pas l'âge de la session).
 
-Statut déduit de la fraîcheur du transcript (heuristique, pas un vrai signal
-de process) :
-  ● active   — activité très récente (Claude travaille)
-  ◐ waiting  — réponse rendue récemment, attend probablement une réponse
-  ○ idle     — plus d'activité depuis un moment
+Statut (flags explicites prioritaires, sinon heuristique de fraîcheur) :
+  ‖ paused       — mis en veille manuellement (survit au prune)
+  ◑ knocking     — Claude attend une réponse (hook « Knock knock », fiable)
+  ● jacked in    — process vivant portant ce sid (--resume ou --session-id)
+  ● in construct — activité très récente
+  ○ unplugged    — plus d'activité depuis un moment
 
 Options :
-  (défaut)        live, redessiné toutes les 60 s
+  (défaut)        live, redessiné toutes les 60 s ; 3 niveaux cyclés par Tab
   --once / -1     snapshot puis rend la main
-  --all  / -a     inclut les sessions d'agent (agenda, mail, obs-*…)
-  --full / -f     colonnes CTX (contexte) + OUT (tokens générés)
-  --hide-idle     masque les sessions inactives (○ unplugged)
+  --all  / -a     démarre au niveau complet (inclut les sessions de fond)
+  --full / -f     démarre au niveau complet (colonnes tokens/coût)
   --interval N    intervalle de rafraîchissement en s (défaut 60)
   --ctx-max N     seuil pour la couleur de CTX (défaut 200000)
 
 Touches (mode live) :
   ↑↓ / j k        naviguer ; PgUp/PgDn page ; g/G haut/bas
   ⏎               focus la fenêtre kitty de l'agent (sinon reprise dans une nouvelle)
-  n / [Red Pill]  red pill : ouvre le sélecteur redpill dans une nouvelle fenêtre kitty
-                  (touche n, ou clic sur le bouton [⏏ Red Pill] de l'en-tête)
+  n / [💊 Red Pill]  ouvre le sélecteur redpill dans une nouvelle fenêtre kitty
+                  (touche n, ou clic sur le bouton [💊 Red Pill] de l'en-tête)
+  z               (dé)marquer la session sélectionnée en veille (paused)
+  w               réveiller la session sélectionnée (focus / rouvre)
+  W / [⏰ Wake Up Neo]  réveiller TOUTES les sessions en pause
   o               ouvrir le détail de la session (métadonnées + tours)
   Esc             revenir à la liste (depuis le détail)
   /               filtrer la liste (projet / titre / prompt) ; Esc efface
   R               reprendre la session (claude --resume) dans son cwd
   Ctrl+K          fermer la session : tue le process (SIGTERM) après confirmation
-  0               afficher/masquer les sessions de fond
-  i               afficher/masquer les sessions inactives (○ unplugged)
-  t               afficher/masquer tokens + coût
+  Tab             cycle de niveau : normal → étendu (+unplugged) → complet (+bg)
   s               changer le tri (activité / contexte / tokens)
   p               pause/reprise du refresh ; r : refresh immédiat
   q               quitter
 
-Le mode --full / -f (ou t) ajoute CTX (contexte), OUT (tokens générés) et
-COST (coût $ estimé). MODEL est coloré par famille. Statut `● live` =
-session reprise via `claude --resume` détectée (fiable) ; sinon heuristique.
+Niveaux : normal = jacked in / in construct / paused / knocking ; étendu ajoute
+les unplugged ; complet ajoute les sessions de fond + colonnes CTX / OUT / COST /
+HOST / MODEL. Statut `● jacked in` = process vivant détecté ; sinon heuristique.
 """
 import glob
 import json
@@ -276,12 +277,14 @@ def claude_procs():
             continue
         if not argv or os.path.basename(argv[0]) != "claude":
             continue
-        resume_id = None
-        if "--resume" in argv:
-            try:
-                resume_id = argv[argv.index("--resume") + 1]
-            except (ValueError, IndexError):
-                pass
+        resume_id = None  # sid porté par ce process (repris OU nouvelle session)
+        for flag in ("--resume", "--session-id"):
+            if flag in argv:
+                try:
+                    resume_id = argv[argv.index(flag) + 1]
+                    break
+                except (ValueError, IndexError):
+                    pass
         try:
             cwd = os.readlink("/proc/%s/cwd" % pid)
         except Exception:
@@ -318,25 +321,31 @@ def kill_candidates(sess, procs):
     return [p for p in procs if p.get("cwd") == cwd]
 
 
-STATUS_META = {  # état brut → (couleur, libellé thème Matrix)
+STATUS_META = {  # état → (couleur, libellé thème Matrix) — glyphes mono-cellule
+    "paused": (T_LBL, "‖ paused"),      # flag manuel (veille)
+    "knocking": (T_YELLOW, "◑ knocking"),  # flag waiting fiable (hook « Knock knock »)
     "live": (T_ACTIVE, "● jacked in"),
     "active": (T_ACTIVE, "● in construct"),
-    "waiting": (T_YELLOW, "◐ awaiting"),
     "idle": (T_DIM, "○ unplugged"),
 }
 
 
 def status_kind(sess, now):
-    """État brut de la session ('live'/'active'/'waiting'/'idle') + âge depuis mtime."""
+    """État de la session + âge depuis mtime. Les flags explicites priment :
+    paused (manuel) puis knocking (waiting, hook fiable), puis la liveness du
+    process, puis l'activité récente. L'ancienne heuristique d'âge ne produit
+    plus « awaiting » (au-delà du seuil d'activité → unplugged)."""
     age = now - sess["mtime"]
-    if sess.get("live"):  # process repris confirmé (claude --resume) → fiable
+    if sess.get("paused"):
+        return "paused", age
+    if sess.get("waiting"):
+        return "knocking", age
+    if sess.get("live"):  # process vivant portant ce sid (--resume ou --session-id)
         return "live", age
     if sess["last_msg_type"] == "user" and age < RESPONDING_MAX:
         return "active", age
     if age < ACTIVE_MAX:
         return "active", age
-    if age < WAITING_MAX:
-        return "waiting", age
     return "idle", age
 
 
@@ -585,6 +594,7 @@ def strip_ansi(s):
 
 
 SORT_LABELS = ["last activity", "context", "tokens"]
+LEVEL_LABELS = ["normal", "étendu", "complet"]  # Tab : jacked-in/paused/knocking → +unplugged → +bg
 
 
 def sort_sessions(sessions, mode):
@@ -607,11 +617,6 @@ def ctx_cell(n, ctx_max):
     return c(code, txt)
 
 
-def state_marker(s):
-    """Marqueur combiné de la colonne d'état : ‖ (paused), ? (waiting), les deux, ou vide."""
-    return ("‖" if s.get("paused") else "") + ("?" if s.get("waiting") else "")
-
-
 def state_last_age(s, now):
     """Âge affiché en colonne LAST : depuis le plus récent de paused.since/waiting.since
     si l'un est posé, sinon depuis mtime (activité)."""
@@ -622,44 +627,35 @@ def state_last_age(s, now):
 
 def render(sessions, include_agents, paused=None, interval=None, full=False,
            sel=-1, sort_mode=0, ctx_max=200000, top=0, query="", searching=False,
-           hide_idle=False):
+           hide_idle=False, level=0):
     now = time.time()
     when = time.strftime("%H:%M:%S", time.localtime(now))
     n = len(sessions)
     term = shutil.get_terminal_size((120, 40))
 
-    det = "on" if full else "off"
-
-    # ---- En-tête multi-colonnes façon k9s (au-dessus du cadre) ----
+    # ---- En-tête multi-colonnes façon k9s (au-dessus du cadre). Pas de titre :
+    #      le logo MATRIX en haut à droite (overlay_right) tient ce rôle. ----
     if paused is not None:  # mode live
         col1 = [
             kv("Sessions", n),
             kv("Sort", SORT_LABELS[sort_mode]),
-            kv("Tokens", det),
-            kv("Unplugged", "hidden" if hide_idle else "shown"),
+            kv("View", LEVEL_LABELS[level]),
             kv("Refresh", "paused" if paused else "%ds" % interval),
             kv("Updated", when),
         ]
-        col2 = [
-            c(T_LBL, "Background ") + c(T_KEY, "<0>"),
-            opt(not include_agents, "hidden"),
-            opt(include_agents, "shown"),
-        ]
         nav = [c(T_LBL, "Navigation"),
-               hk("<↑↓>", "navigate"), hk("</>", "search"), hk("<s>", "sort"),
-               hk("<t>", "tokens"), hk("<i>", "unplugged")]
+               hk("<↑↓>", "navigate"), hk("</>", "search"),
+               hk("<s>", "sort"), hk("<Tab>", "view")]
         sess = [c(T_LBL, "Session"),
                 hk("<⏎>", "focus win"), hk("<R>", "resume"), hk("<z>", "pause"),
                 hk("<w>", "wake"), hk("<o>", "detail"), hk("<^K>", "kill")]
-        mtx = [c(T_LBL, "The Matrix"),
+        mtx = [c(T_LBL, "General"),
                hk("<p>", "pause"), hk("<r>", "refresh"), hk("<q>", "quit")]
-        out = [c(T_LOGO, "The Matrix") + c(T_DIM, "   The Matrix has you")]
-        out += side_by_side([col1, col2, nav, sess, mtx])
+        out = side_by_side([col1, nav, sess, mtx])
         # Boutons souris SOUS le bloc colonnes : hors de la zone bannière (BANNER_ROWS
         # lignes). Les emoji ⏰/💊 sont double-largeur alors que overlay_right/vis
         # supposent des glyphes demi-largeur ; sur une ligne pairée à une rangée du
-        # logo, ils décaleraient l'alignement (ligne vide au milieu). Ici la ligne
-        # tombe au-delà de la bannière, donc renvoyée telle quelle.
+        # logo, ils décaleraient l'alignement. Ici la ligne tombe au-delà de la bannière.
         out.append(c(T_BTN, RED_PILL_BTN) + c(T_DIM, " <n>")
                    + "   " + c(T_BTN, WAKE_BTN) + c(T_DIM, " <W>"))
         if searching:  # saisie de filtre en cours
@@ -669,15 +665,15 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
                        + c(T_DIM, "   (Esc clears)"))
         out.append("")
     else:
-        out = [c(T_LOGO, "The Matrix") + c(T_DIM, "  The Matrix has you  (%s)" % when), ""]
+        out = [""]
 
     # ---- Tableau encadré. MODEL toujours affiché ; LAST PROMPT prend le reste. ----
-    if full:
-        fixed = [("PROJECT", 16), ("STATUS", 16), ("AGENT", 15), ("HOST", 7), ("‖?", 3), ("TITLE", 16), ("LAST", 6),
-                 ("AGE", 6), ("CTX", 6), ("OUT", 6), ("COST", 7), ("MODEL", 12)]
-    else:
-        fixed = [("PROJECT", 16), ("STATUS", 16), ("AGENT", 15), ("HOST", 7), ("‖?", 3), ("TITLE", 26), ("LAST", 6),
-                 ("AGE", 6), ("MODEL", 12)]
+    if full:  # complet : + tokens/coût, host, modèle
+        fixed = [("AGENT", 15), ("TITLE", 22), ("STATUS", 14), ("PROJECT", 14), ("LAST", 6),
+                 ("AGE", 6), ("CTX", 6), ("OUT", 6), ("COST", 7), ("HOST", 7), ("MODEL", 12)]
+    else:  # normal / étendu : colonnes minimales
+        fixed = [("AGENT", 15), ("TITLE", 30), ("STATUS", 14), ("PROJECT", 16), ("LAST", 6),
+                 ("AGE", 6)]
     sep = 2
     box_w = term.columns
     contentw = max(40, box_w - 4)
@@ -704,22 +700,21 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
         last = state_last_age(s, now)
         started = s.get("started")
         age = (now - started) if started else last
+        proj_w = 14 if full else 16
         proj = c(T_DIM, trunc(s["project"], 7) + " [bg]") if s.get("background") \
-            else trunc(s["project"], 16)
-        model = pad(c(model_color(s.get("model")), trunc(short_model(s.get("model")), 12)), 12)
+            else trunc(s["project"], proj_w)
         ag = s.get("agent")
         agent_cell = c(T_GREEN, trunc(ag, 15)) if ag else c(T_DIM, "—")
-        mark = pad(c(T_ACTIVE, state_marker(s)), 3)
-        cells = [pad(proj, 16), pad(st, 16), pad(agent_cell, 15), pad(host_cell(s), 7), mark]
         if full:
-            cells += [pad(title_cell(s, 16), 16), pad(fmt_age(last), 6),
-                      pad(fmt_age(age), 6),
-                      pad(ctx_cell(s.get("context_tokens"), ctx_max), 6),
-                      pad(fmt_tokens(s.get("output_total")), 6),
-                      pad(fmt_cost(s.get("cost")), 7), model]
+            model = pad(c(model_color(s.get("model")), trunc(short_model(s.get("model")), 12)), 12)
+            cells = [pad(agent_cell, 15), pad(title_cell(s, 22), 22), pad(st, 14),
+                     pad(proj, 14), pad(fmt_age(last), 6), pad(fmt_age(age), 6),
+                     pad(ctx_cell(s.get("context_tokens"), ctx_max), 6),
+                     pad(fmt_tokens(s.get("output_total")), 6),
+                     pad(fmt_cost(s.get("cost")), 7), pad(host_cell(s), 7), model]
         else:
-            cells += [pad(title_cell(s, 26), 26), pad(fmt_age(last), 6),
-                      pad(fmt_age(age), 6), model]
+            cells = [pad(agent_cell, 15), pad(title_cell(s, 30), 30), pad(st, 14),
+                     pad(proj, 16), pad(fmt_age(last), 6), pad(fmt_age(age), 6)]
         cells.append(pad(trunc(s["last_prompt"], prompt_w), prompt_w))
         row = (" " * sep).join(cells)
         if idx == sel:  # ligne sélectionnée : curseur k9s (noir sur aqua), pleine largeur
@@ -1100,9 +1095,8 @@ def wake_all():
 
 
 def run_live(opts):
-    show_all = opts["all"]
-    full = opts["full"]
-    hide_idle = opts["hide_idle"]
+    level = 2 if (opts["all"] or opts["full"]) else 0  # 0 normal · 1 étendu · 2 complet
+    show_all, hide_idle, full = level == 2, level == 0, level == 2
     paused = False
     sort_mode = 0
     sel = 0
@@ -1120,7 +1114,7 @@ def run_live(opts):
             sys.stdout.write(render(s, show_all, paused=False,
                              interval=opts["interval"], full=full,
                              sort_mode=sort_mode, ctx_max=ctx_max,
-                             hide_idle=hide_idle) + "\n")
+                             hide_idle=hide_idle, level=level) + "\n")
             sys.stdout.flush()
             time.sleep(opts["interval"])
         return
@@ -1160,7 +1154,7 @@ def run_live(opts):
                                     interval=opts["interval"], full=full, sel=sel,
                                     sort_mode=sort_mode, ctx_max=ctx_max, top=top,
                                     query=query, searching=searching,
-                                    hide_idle=hide_idle)
+                                    hide_idle=hide_idle, level=level)
                 sys.stdout.write("\033[H\033[J")
                 sys.stdout.write(screen_str + "\n")
                 sys.stdout.flush()
@@ -1237,16 +1231,11 @@ def run_live(opts):
                     sel = 0
                 elif k in ("G", "END"):
                     sel = (len(view) - 1) if view else 0
-                elif k == "0":
-                    show_all = not show_all
+                elif k == "\t":  # Tab : cycle normal → étendu → complet
+                    level = (level + 1) % 3
+                    show_all, hide_idle, full = level == 2, level == 0, level == 2
                     sessions = refresh()
                     sel = 0
-                elif k in ("i", "I"):
-                    hide_idle = not hide_idle
-                    sel = 0
-                elif k in ("t", "T"):
-                    full = not full
-                    sessions = refresh()
                 elif k in ("s", "S"):
                     sort_mode = (sort_mode + 1) % 3
                     sessions = refresh()
