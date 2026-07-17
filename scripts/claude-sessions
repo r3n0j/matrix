@@ -8,7 +8,7 @@ LAST = temps écoulé depuis la dernière interaction (pas l'âge de la session)
 Statut (flags explicites prioritaires, sinon heuristique de fraîcheur) :
   ‖ paused       — mis en veille manuellement (survit au prune)
   ◑ knocking     — Claude attend une réponse (hook « Knock knock », fiable)
-  ● in construct — Claude travaille : tour en cours (hook UserPromptSubmit→Stop,
+  ● in the matrix — Claude travaille : tour en cours (hook UserPromptSubmit→Stop,
                    fiable), outil/subagent en cours, ou activité transcript récente
   ● jacked in    — session ouverte/attachée (process vivant, sans activité récente)
   ○ unplugged    — plus d'activité depuis un moment
@@ -341,7 +341,7 @@ STATUS_META = {  # état → (couleur, libellé thème Matrix) — glyphes mono-
     "paused": (T_LBL, "‖ paused"),      # flag manuel (veille)
     "knocking": (T_YELLOW, "◑ knocking"),  # flag waiting fiable (hook « Knock knock »)
     "live": (T_ACTIVE, "● jacked in"),
-    "active": (T_ACTIVE, "● in construct"),
+    "active": (T_ACTIVE, "● in the matrix"),
     "idle": (T_DIM, "○ unplugged"),
 }
 
@@ -690,10 +690,10 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
 
     # ---- Tableau encadré. MODEL toujours affiché ; LAST PROMPT prend le reste. ----
     if full:  # complet : + tokens/coût, host, modèle
-        fixed = [("AGENT", 15), ("TITLE", 22), ("STATUS", 14), ("PROJECT", 14), ("LAST", 6),
+        fixed = [("AGENT", 15), ("TITLE", 22), ("STATUS", 16), ("PROJECT", 14), ("LAST", 6),
                  ("AGE", 6), ("CTX", 6), ("OUT", 6), ("COST", 7), ("HOST", 7), ("MODEL", 12)]
     else:  # normal / étendu : colonnes minimales
-        fixed = [("AGENT", 15), ("TITLE", 30), ("STATUS", 14), ("PROJECT", 16), ("LAST", 6),
+        fixed = [("AGENT", 15), ("TITLE", 30), ("STATUS", 16), ("PROJECT", 16), ("LAST", 6),
                  ("AGE", 6)]
     sep = 2
     box_w = term.columns
@@ -728,13 +728,13 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
         agent_cell = c(T_GREEN, trunc(ag, 15)) if ag else c(T_DIM, "—")
         if full:
             model = pad(c(model_color(s.get("model")), trunc(short_model(s.get("model")), 12)), 12)
-            cells = [pad(agent_cell, 15), pad(title_cell(s, 22), 22), pad(st, 14),
+            cells = [pad(agent_cell, 15), pad(title_cell(s, 22), 22), pad(st, 16),
                      pad(proj, 14), pad(fmt_age(last), 6), pad(fmt_age(age), 6),
                      pad(ctx_cell(s.get("context_tokens"), ctx_max), 6),
                      pad(fmt_tokens(s.get("output_total")), 6),
                      pad(fmt_cost(s.get("cost")), 7), pad(host_cell(s), 7), model]
         else:
-            cells = [pad(agent_cell, 15), pad(title_cell(s, 30), 30), pad(st, 14),
+            cells = [pad(agent_cell, 15), pad(title_cell(s, 30), 30), pad(st, 16),
                      pad(proj, 16), pad(fmt_age(last), 6), pad(fmt_age(age), 6)]
         cells.append(pad(trunc(s["last_prompt"], prompt_w), prompt_w))
         row = (" " * sep).join(cells)
