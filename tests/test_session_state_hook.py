@@ -5,12 +5,13 @@ import unittest
 from unittest import mock
 
 SCRIPTS = os.path.join(os.path.dirname(__file__), "..", "scripts")
+HOOKS = os.path.join(os.path.dirname(__file__), "..", "hooks")
 sys.path.insert(0, SCRIPTS)
 import matrix_lib  # noqa: E402
 
 import importlib.util  # noqa: E402
 spec = importlib.util.spec_from_file_location(
-    "session_state_hook", os.path.join(SCRIPTS, "session-state-hook.py"))
+    "session_state_hook", os.path.join(HOOKS, "session-state-hook.py"))
 hook = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(hook)
 
