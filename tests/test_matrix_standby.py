@@ -80,6 +80,20 @@ class WaitingPrimitivesTest(StateTestBase):
         self.assertIn("waiting", e)
 
 
+class BusyPrimitivesTest(StateTestBase):
+    def test_set_busy_marks_and_refreshes_seen(self):
+        matrix_lib.set_busy("s1", cwd="/x")
+        e = matrix_lib.get("s1")
+        self.assertIn("since", e["busy"])
+        self.assertAlmostEqual(e["seen"], e["busy"]["since"], delta=1)
+
+    def test_clear_busy_idempotent(self):
+        matrix_lib.set_busy("s1")
+        matrix_lib.clear_busy("s1")
+        matrix_lib.clear_busy("s1")
+        self.assertNotIn("busy", matrix_lib.get("s1") or {})
+
+
 class SidResolutionTest(unittest.TestCase):
     def test_sid_from_equals_form(self):
         self.assertEqual(matrix_lib._sid_from_args(["claude", "--session-id=abc"]), "abc")

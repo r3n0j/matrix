@@ -8,7 +8,8 @@ LAST = temps écoulé depuis la dernière interaction (pas l'âge de la session)
 Statut (flags explicites prioritaires, sinon heuristique de fraîcheur) :
   ‖ paused       — mis en veille manuellement (survit au prune)
   ◑ knocking     — Claude attend une réponse (hook « Knock knock », fiable)
-  ● in construct — Claude travaille (activité récente ou prompt en cours)
+  ● in construct — Claude travaille : tour en cours (hook UserPromptSubmit→Stop,
+                   fiable), outil/subagent en cours, ou activité transcript récente
   ● jacked in    — session ouverte/attachée (process vivant, sans activité récente)
   ○ unplugged    — plus d'activité depuis un moment
 
@@ -355,8 +356,10 @@ def status_kind(sess, now):
         return "paused", age
     if sess.get("waiting"):
         return "knocking", age
+    if sess.get("busy") and sess.get("live"):
+        return "active", age    # tour en cours (hook UserPromptSubmit→Stop, fiable)
     if sess.get("working"):
-        return "active", age    # outil/subagent en cours (dernier msg = tool_use)
+        return "active", age    # fallback : outil/subagent en cours (dernier msg = tool_use)
     if sess["last_msg_type"] == "user" and age < RESPONDING_MAX:
         return "active", age    # prompt envoyé, Claude travaille dessus
     if age < ACTIVE_MAX:
@@ -533,6 +536,7 @@ def collect(include_agents, with_tokens=False):
         s["mx_socket"] = e.get("kitty_listen_on")
         s["paused"] = e.get("paused")
         s["waiting"] = e.get("waiting")
+        s["busy"] = e.get("busy")
         cn = s.get("custom_name")
         # ne garder le /rename que s'il est distinct (pas un persona, pas l'ai-title)
         s["custom_name"] = cn if (cn and cn not in pool and cn != s.get("title")) else None

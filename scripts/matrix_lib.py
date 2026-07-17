@@ -288,6 +288,30 @@ def clear_waiting(sid):
             _save_state(state)
 
 
+def set_busy(sid, cwd=None):
+    """Marque une session « au travail » : le tour est en cours (posé sur
+    UserPromptSubmit, levé sur Stop). Rafraîchit `seen` pour que la session
+    active ne soit pas purgée. Signal fiable, indépendant du mtime du transcript."""
+    now = time.time()
+    with _Lock():
+        state = _load_state()
+        entry = _ensure_entry(state["sessions"], sid, cwd, now)
+        entry["busy"] = {"since": now}
+        entry["seen"] = now
+        _save_state(state)
+        return entry
+
+
+def clear_busy(sid):
+    """Lève le flag « au travail » (idempotent ; posé sur Stop)."""
+    with _Lock():
+        state = _load_state()
+        entry = state["sessions"].get(sid)
+        if entry and "busy" in entry:
+            del entry["busy"]
+            _save_state(state)
+
+
 def paused_sessions():
     """Sessions en pause, plus récentes d'abord, jointes au transcript pour label/cwd."""
     state = _load_state()

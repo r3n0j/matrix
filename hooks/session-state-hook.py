@@ -2,8 +2,9 @@
 """Hook d'état de session (découplé de la notification).
 
 Usage (payload JSON du hook sur stdin) :
-  session-state-hook.py set    -> Notification : Claude attend une réponse
-  session-state-hook.py clear  -> Stop / UserPromptSubmit : plus en attente
+  session-state-hook.py set    -> Notification    : Claude attend une réponse (waiting)
+  session-state-hook.py busy   -> UserPromptSubmit : le tour démarre (busy, + clear waiting)
+  session-state-hook.py clear  -> Stop            : tour terminé (clear busy + waiting)
 
 N'envoie AUCUNE notification (c'est le rôle de notify-event.py). Ne lève jamais.
 """
@@ -47,10 +48,14 @@ def handle(action, payload):
         if not sid or is_background(payload):
             return
         import matrix_lib
-        if action == "set":
+        if action == "set":          # Notification : Claude attend une réponse
             matrix_lib.set_waiting(sid, message=payload.get("message"),
                                    cwd=payload.get("cwd"))
-        elif action == "clear":
+        elif action == "busy":       # UserPromptSubmit : le tour démarre
+            matrix_lib.set_busy(sid, cwd=payload.get("cwd"))
+            matrix_lib.clear_waiting(sid)
+        elif action == "clear":      # Stop : tour terminé
+            matrix_lib.clear_busy(sid)
             matrix_lib.clear_waiting(sid)
     except Exception:
         pass
