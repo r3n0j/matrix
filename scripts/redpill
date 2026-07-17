@@ -184,17 +184,19 @@ def _term_width():
 
 def _visible_rows():
     try:
-        return max(3, os.get_terminal_size().lines - TOP_ROWS - 3)
+        return max(3, os.get_terminal_size().lines - TOP_ROWS - 5)
     except OSError:
         return 12
 
 
-def select(items, render, filter_key, crumbs, quote, subhead, hint):
+def select(items, render, filter_key, crumbs, quote, subhead, hint, detail=None):
     """Sélecteur interactif : renvoie l'item choisi, BACK si Échap, None si Ctrl-C,
     NOTTY si pas de TTY.
 
     `crumbs` = fil d'Ariane (segments joints par ` › `) affiché sous la réplique.
-    `render(item, selected)` -> ligne affichée ; `filter_key(item)` -> texte filtrable."""
+    `render(item, selected)` -> ligne affichée ; `filter_key(item)` -> texte filtrable.
+    `detail(item)` -> ligne de détail (déjà stylée) affichée sous la liste pour l'item
+    en surbrillance, ou None pour n'en afficher aucune."""
     try:
         fh = open("/dev/tty", "r+b", buffering=0)
     except OSError:
@@ -222,7 +224,7 @@ def select(items, render, filter_key, crumbs, quote, subhead, hint):
     try:
         tty.setraw(fd)
         write("\x1b[?25l")
-        start_row = _reserve(fd, TOP_ROWS + 2 + min(len(items), rows))
+        start_row = _reserve(fd, TOP_ROWS + 4 + min(len(items), rows))
         if start_row is not None:
             write("\x1b[?1000h\x1b[?1006h")  # reporting souris (clic + SGR)
             mouse = True
@@ -250,6 +252,11 @@ def select(items, render, filter_key, crumbs, quote, subhead, hint):
             if query:
                 footer += "   %sfiltre:%s %s%s%s" % (DIM, RESET, GREEN, query, RESET)
             lines.append("")
+            if detail is not None and shown:
+                dl = detail(shown[idx])
+                if dl:
+                    lines.append(dl)
+                    lines.append("")
             lines.append(footer)
 
             write("".join(line + "\x1b[K\r\n" for line in lines))
@@ -485,26 +492,42 @@ def main():
         now = time.time()
         items = [new_entry] + sessions
 
+        label_w = max(30, _term_width() - 42)
+
         def render(it, selected):
             if it is new_entry:
                 return "%s＋ nouvelle session…%s" % (BRIGHT, RESET)
             agent = it.get("agent") or "—"
             cols = (trunc(it["project"], 14), trunc(agent, 14),
-                    trunc(it["label"], 30), fmt_age(now - it["mtime"]))
+                    trunc(it["label"], label_w), fmt_age(now - it["mtime"]))
             if selected:
-                return "%s%-14s %-14s %-30s (%s)%s" % (BRIGHT, cols[0], cols[1], cols[2], cols[3], RESET)
-            return "%-14s %s%-14s%s %-30s %s(%s)%s" % (
-                cols[0], GREEN, cols[1], RESET, cols[2], DIM, cols[3], RESET)
+                return "%s%-14s %-14s %-*s (%s)%s" % (BRIGHT, cols[0], cols[1], label_w, cols[2], cols[3], RESET)
+            return "%-14s %s%-14s%s %-*s %s(%s)%s" % (
+                cols[0], GREEN, cols[1], RESET, label_w, cols[2], DIM, cols[3], RESET)
 
         def fkey(it):
             if it is new_entry:
                 return "nouvelle session new nouveau"
             return " ".join([it.get("project") or "", it.get("agent") or "", it.get("label") or ""])
 
+        def detail(it):
+            if it is new_entry:
+                return None
+            bits = ["%s%s%s" % (BRIGHT, it["label"], RESET)]
+            cwd = it.get("cwd")
+            if cwd:
+                short = "~" + cwd[len(HOME):] if cwd.startswith(HOME) else cwd
+                bits.append("%s%s%s" % (GREEN, short, RESET))
+            if it.get("agent"):
+                bits.append(it["agent"])
+            bits.append("%sil y a %s%s" % (DIM, fmt_age(now - it["mtime"]), RESET))
+            sep = "%s  ·  %s" % (DIM, RESET)
+            return "   " + sep.join(bits)
+
         quote = "%sThe Matrix has you…%s" % (GREEN, RESET)
         subhead = "%schoisis ta réalité%s" % (BRIGHT, RESET)
         hint = "↑↓ · tape pour filtrer · clic · ⏎ · Échap = session ici"
-        choice = select(items, render, fkey, [], quote, subhead, hint)
+        choice = select(items, render, fkey, [], quote, subhead, hint, detail)
 
         if choice is NOTTY:
             return main_fallback(sessions, now)

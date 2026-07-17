@@ -258,9 +258,10 @@ def list_sessions(limit=15, since_days=3, scan_max=40):
             cands.append((mtime, path))
     cands.sort(reverse=True)
     state = all_sessions()
+    personas = (load_config() or {}).get("personas") or []
     out = []
     for mtime, path in cands[:scan_max]:
-        cwd, ai, is_bg = None, None, False
+        cwd, ai, rename, is_bg = None, None, None, False
         try:
             with open(path) as fh:
                 for line in fh:
@@ -279,15 +280,23 @@ def list_sessions(limit=15, since_days=3, scan_max=40):
                                 ai = val
                         except Exception:
                             pass
+                    if '"agent-name"' in line:
+                        try:
+                            val = json.loads(line).get("agentName")
+                            if val:
+                                rename = val
+                        except Exception:
+                            pass
         except OSError:
             continue
         if is_bg:
             continue
         sid = os.path.basename(path)[:-6]
         project = os.path.basename((cwd or "").rstrip("/")) or "?"
+        label = rename if (rename and rename not in personas) else (ai or project)
         out.append({"sid": sid, "cwd": cwd, "project": project,
                     "agent": (state.get(sid) or {}).get("agent"),
-                    "label": ai or project, "mtime": mtime})
+                    "label": label, "mtime": mtime})
         if len(out) >= limit:
             break
     return out
