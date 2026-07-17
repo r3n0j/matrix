@@ -8,8 +8,8 @@ LAST = temps écoulé depuis la dernière interaction (pas l'âge de la session)
 Statut (flags explicites prioritaires, sinon heuristique de fraîcheur) :
   ‖ paused       — mis en veille manuellement (survit au prune)
   ◑ knocking     — Claude attend une réponse (hook « Knock knock », fiable)
-  ● jacked in    — process vivant portant ce sid (--resume ou --session-id)
-  ● in construct — activité très récente
+  ● in construct — Claude travaille (activité récente ou prompt en cours)
+  ● jacked in    — session ouverte/attachée (process vivant, sans activité récente)
   ○ unplugged    — plus d'activité depuis un moment
 
 Options :
@@ -340,12 +340,12 @@ def status_kind(sess, now):
         return "paused", age
     if sess.get("waiting"):
         return "knocking", age
-    if sess.get("live"):  # process vivant portant ce sid (--resume ou --session-id)
-        return "live", age
     if sess["last_msg_type"] == "user" and age < RESPONDING_MAX:
-        return "active", age
+        return "active", age    # prompt envoyé, Claude travaille dessus
     if age < ACTIVE_MAX:
-        return "active", age
+        return "active", age    # activité transcript très récente
+    if sess.get("live"):  # process vivant (--resume/--session-id) mais pas d'activité récente
+        return "live", age
     return "idle", age
 
 
