@@ -490,15 +490,21 @@ def main():
     new_entry = {"_new": True}
     while True:
         now = time.time()
-        items = [new_entry] + sessions
+        paused = [s for s in sessions if s.get("paused")]
+        wake_entry = {"_wake": True, "_count": len(paused)}
+        sessions_sorted = paused + [s for s in sessions if not s.get("paused")]
+        items = ([wake_entry] if paused else []) + [new_entry] + sessions_sorted
 
         label_w = max(30, _term_width() - 42)
 
         def render(it, selected):
+            if it.get("_wake"):
+                return "%s⏰ Réveiller les %d sessions en pause…%s" % (BRIGHT, it["_count"], RESET)
             if it is new_entry:
                 return "%s＋ nouvelle session…%s" % (BRIGHT, RESET)
+            proj = ("‖ " if it.get("paused") else "") + it["project"]
             agent = it.get("agent") or "—"
-            cols = (trunc(it["project"], 14), trunc(agent, 14),
+            cols = (trunc(proj, 14), trunc(agent, 14),
                     trunc(it["label"], label_w), fmt_age(now - it["mtime"]))
             if selected:
                 return "%s%-14s %-14s %-*s (%s)%s" % (BRIGHT, cols[0], cols[1], label_w, cols[2], cols[3], RESET)
@@ -506,11 +512,15 @@ def main():
                 cols[0], GREEN, cols[1], RESET, label_w, cols[2], DIM, cols[3], RESET)
 
         def fkey(it):
+            if it.get("_wake"):
+                return "wake reveiller pause"
             if it is new_entry:
                 return "nouvelle session new nouveau"
             return " ".join([it.get("project") or "", it.get("agent") or "", it.get("label") or ""])
 
         def detail(it):
+            if it.get("_wake"):
+                return None
             if it is new_entry:
                 return None
             bits = ["%s%s%s" % (BRIGHT, it["label"], RESET)]
@@ -540,6 +550,19 @@ def main():
             if res is BACK:
                 continue
             return launch_new(res[0], res[1])
+        if choice.get("_wake"):
+            for p in m.paused_sessions():
+                cwd = p.get("cwd")
+                try:
+                    import subprocess
+                    subprocess.Popen(["kitty", "--directory", cwd or HOME,
+                                      "zsh", "-ic", "matrix resume %s" % p["sid"]],
+                                     start_new_session=True,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    m.clear_paused(p["sid"])
+                except Exception:
+                    pass
+            return
         return resume_session(choice)
 
 
