@@ -36,7 +36,7 @@ Touches (mode live) :
   Ctrl+K          fermer la session : tue le process (SIGTERM) après confirmation
   Tab             cycle de niveau : normal → étendu (+unplugged) → complet (+bg)
   s               changer le tri (activité / contexte / tokens)
-  p               pause/reprise du refresh ; r : refresh immédiat
+  p               pause/reprise du refresh ; F5 : refresh immédiat (r : alias)
   q               quitter
 
 Niveaux : normal = jacked in / in construct / paused / knocking ; étendu ajoute
@@ -210,8 +210,6 @@ def parse_session(path, with_tokens=False):
             if t in ("assistant", "user") and cwd is None:
                 cwd = obj.get("cwd")
                 git_branch = obj.get("gitBranch")
-                if entrypoint is None:
-                    entrypoint = obj.get("entrypoint")
                 if last_msg_type is None:
                     last_msg_type = t
             if t == "assistant":
@@ -236,16 +234,25 @@ def parse_session(path, with_tokens=False):
     except Exception:
         mtime = 0
 
-    # Création de la session = 1er timestamp du transcript (scan rapide du début).
+    # Ouverture de la session (scan rapide du début) : 1er timestamp = création, et
+    # entrypoint du 1er message = mode de LANCEMENT réel (cli/vscode/sdk-cli). On se
+    # fie à l'ouverture, pas au dernier tour : sinon un simple `claude -p`/resume en
+    # mode print (sdk-cli) reclasserait toute une session interactive en background.
     started = None
     for line in lines:
-        if '"timestamp"' in line:
+        if started is None and '"timestamp"' in line:
             try:
                 started = parse_ts(json.loads(line).get("timestamp"))
             except Exception:
                 started = None
-            if started:
-                break
+        if entrypoint is None and '"entrypoint"' in line and (
+                '"user"' in line or '"assistant"' in line):
+            try:
+                entrypoint = json.loads(line).get("entrypoint")
+            except Exception:
+                entrypoint = None
+        if started is not None and entrypoint is not None:
+            break
 
     # Session de fond (non interactive) : agent, ou lancée via SDK (cron, /morning…).
     background = is_agent or (entrypoint == "sdk-cli")
@@ -671,7 +678,7 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
                 hk("<⏎>", "focus win"), hk("<R>", "resume"), hk("<z>", "pause"),
                 hk("<w>", "wake"), hk("<o>", "detail"), hk("<^K>", "kill")]
         mtx = [c(T_LBL, "General"),
-               hk("<p>", "pause"), hk("<r>", "refresh"), hk("<q>", "quit")]
+               hk("<p>", "pause"), hk("<F5>", "refresh"), hk("<q>", "quit")]
         out = side_by_side([col1, nav, sess, mtx])
         # Boutons souris SOUS le bloc colonnes : hors de la zone bannière (BANNER_ROWS
         # lignes). Les emoji ⏰/💊 sont double-largeur alors que overlay_right/vis
@@ -985,6 +992,7 @@ def read_key(timeout):
         "[A": "UP", "[B": "DOWN", "[C": "RIGHT", "[D": "LEFT",
         "OA": "UP", "OB": "DOWN", "OC": "RIGHT", "OD": "LEFT",
         "[5~": "PGUP", "[6~": "PGDN",
+        "[15~": "F5",
         "[H": "HOME", "[F": "END", "[1~": "HOME", "[4~": "END",
     }.get(seq, "ESC")
 
@@ -1263,7 +1271,7 @@ def run_live(opts):
                     sel = 0
                 elif k in ("p", "P"):
                     paused = not paused
-                elif k == "r":
+                elif k in ("F5", "r"):
                     sessions = refresh()
                 elif k == "ENTER" and view:
                     focus_or_open(view[sel])
