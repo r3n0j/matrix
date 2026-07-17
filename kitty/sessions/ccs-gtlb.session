@@ -2,5 +2,5 @@
 # Lancement : kitty --session ~/.config/kitty/sessions/ccs-gtlb.session
 new_tab ccs + gtlb
 layout fat:bias=50
-launch --title "ccs"  zsh -is eval 'ccs'
+launch --title "ccs"  zsh -is eval '~/.claude/scripts/claude-sessions'
 launch --title "gtlb" zsh -is eval 'gtlb watch'
