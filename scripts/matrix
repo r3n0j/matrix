@@ -80,8 +80,37 @@ def pin_window_title(title):
         pass
 
 
+def _handle_pause(argv):
+    """`matrix pause [sid] [-m note]` / `matrix unpause [sid]`.
+    Sans sid : résout la session courante."""
+    action = argv[0]
+    rest = argv[1:]
+    note = None
+    sid = None
+    i = 0
+    while i < len(rest):
+        if rest[i] in ("-m", "--message") and i + 1 < len(rest):
+            note = rest[i + 1]
+            i += 2
+            continue
+        sid = rest[i]
+        i += 1
+    if not sid:
+        sid = m.current_session_id()
+    if not sid:
+        sys.exit("matrix: session courante introuvable (ni $CLAUDE_SESSION_ID ni process claude parent)")
+    if action == "pause":
+        m.set_paused(sid, note=note, cwd=os.getcwd())
+        print(f"{GREEN}session {sid[:8]} en pause{RESET}" + (f" — {note}" if note else ""))
+    else:
+        m.clear_paused(sid)
+        print(f"{GREEN}session {sid[:8]} réactivée{RESET}")
+
+
 def main():
     argv = sys.argv[1:]
+    if argv and argv[0] in ("pause", "unpause"):
+        return _handle_pause(argv)
     resume_uuid = None
     if argv and argv[0] == "resume":
         if len(argv) < 2:
