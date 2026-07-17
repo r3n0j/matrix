@@ -628,7 +628,8 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
         mtx = [c(T_LBL, "The Matrix"),
                hk("<p>", "pause"), hk("<r>", "refresh"), hk("<q>", "quit")]
         out = [c(T_LOGO, "The Matrix") + c(T_DIM, "   The Matrix has you")
-               + "   " + c(T_BTN, RED_PILL_BTN)]
+               + "   " + c(T_BTN, RED_PILL_BTN) + c(T_DIM, " <n>")
+               + "   " + c(T_BTN, WAKE_BTN) + c(T_DIM, " <W>")]
         out += side_by_side([col1, col2, nav, sess, mtx])
         if searching:  # saisie de filtre en cours
             out.append(c(T_KEY, "/") + c(T_VAL, query) + c(T_ACTIVE, "▌"))
@@ -941,7 +942,8 @@ def read_key(timeout):
     }.get(seq, "ESC")
 
 
-RED_PILL_BTN = "[⏏ Red Pill]"  # bouton souris : lance redpill en nouvelle fenêtre kitty
+RED_PILL_BTN = "[💊 Red Pill]"     # bouton souris : lance redpill en nouvelle fenêtre kitty
+WAKE_BTN = "[⏰ Wake Up Neo]"      # bouton souris : réveille toutes les sessions en pause
 
 
 def button_region(screen_str, marker=RED_PILL_BTN):
@@ -1049,6 +1051,20 @@ def toggle_pause(sess):
     matrix_lib.set_paused(sid, note=note, cwd=sess.get("cwd"))
 
 
+def wake_all():
+    """Réveille toutes les sessions en pause (focus/rouvre chacune), efface leur flag.
+    Renvoie le nombre de sessions traitées."""
+    import matrix_lib
+    paused = matrix_lib.paused_sessions()
+    for p in paused:
+        try:
+            focus_or_open({"sid": p["sid"], "cwd": p.get("cwd"), "agent": p.get("agent")})
+            matrix_lib.clear_paused(p["sid"])
+        except Exception:
+            pass
+    return len(paused)
+
+
 def run_live(opts):
     show_all = opts["all"]
     full = opts["full"]
@@ -1119,9 +1135,15 @@ def run_live(opts):
                 if k is None:           # timeout → auto-refresh
                     sessions = refresh()
                     continue
-                if isinstance(k, tuple) and k[0] == "CLICK":  # seul le bouton Red Pill réagit
+                if isinstance(k, tuple) and k[0] == "CLICK":  # boutons Red Pill / Wake Up Neo
                     if btn and k[2] == btn[0] and btn[1] <= k[1] < btn[2]:
                         open_redpill()
+                        continue
+                    wbtn = button_region(screen_str, WAKE_BTN)
+                    if wbtn and k[2] == wbtn[0] and wbtn[1] <= k[1] < wbtn[2]:
+                        wake_all()
+                        sessions = refresh()
+                        continue
                     continue
                 if searching:           # saisie du filtre en cours
                     if k == "ENTER":
@@ -1151,6 +1173,9 @@ def run_live(opts):
                     sessions = refresh()
                 elif k in ("n", "N"):
                     open_redpill()
+                elif k == "W":
+                    wake_all()
+                    sessions = refresh()
                 elif k in ("o", "O") and view:
                     detail = view[sel]
                     detail_lines = build_detail(detail)
