@@ -218,6 +218,27 @@ def clear_paused(sid):
             _save_state(state)
 
 
+def set_waiting(sid, message=None, cwd=None):
+    """Marque une session en attente d'une réponse utilisateur (auto, transitoire)."""
+    now = time.time()
+    with _Lock():
+        state = _load_state()
+        entry = _ensure_entry(state["sessions"], sid, cwd, now)
+        entry["waiting"] = {"message": message or "", "since": now}
+        _save_state(state)
+        return entry
+
+
+def clear_waiting(sid):
+    """Lève le flag d'attente (idempotent)."""
+    with _Lock():
+        state = _load_state()
+        entry = state["sessions"].get(sid)
+        if entry and "waiting" in entry:
+            del entry["waiting"]
+            _save_state(state)
+
+
 def paused_sessions():
     """Sessions en pause, plus récentes d'abord, jointes au transcript pour label/cwd."""
     state = _load_state()

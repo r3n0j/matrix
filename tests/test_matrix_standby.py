@@ -61,5 +61,24 @@ class PausedPrimitivesTest(StateTestBase):
         self.assertNotIn("s1", state["sessions"])
 
 
+class WaitingPrimitivesTest(StateTestBase):
+    def test_set_waiting_stores_message(self):
+        matrix_lib.set_waiting("s1", message="Puis-je merger ?", cwd="/x")
+        self.assertEqual(matrix_lib.get("s1")["waiting"]["message"], "Puis-je merger ?")
+
+    def test_clear_waiting_idempotent(self):
+        matrix_lib.set_waiting("s1")
+        matrix_lib.clear_waiting("s1")
+        matrix_lib.clear_waiting("s1")
+        self.assertNotIn("waiting", matrix_lib.get("s1") or {})
+
+    def test_waiting_and_paused_coexist(self):
+        matrix_lib.set_paused("s1", note="n")
+        matrix_lib.set_waiting("s1", message="m")
+        e = matrix_lib.get("s1")
+        self.assertIn("paused", e)
+        self.assertIn("waiting", e)
+
+
 if __name__ == "__main__":
     unittest.main()
