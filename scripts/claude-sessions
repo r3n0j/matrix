@@ -87,7 +87,7 @@ T_GREEN = "38;5;42"
 T_YELLOW = "38;5;214"
 T_RED = "38;5;197"
 T_CURSOR = "38;5;16;48;5;51"   # ligne sélectionnée — noir sur fond aqua
-T_BTN = "1;38;5;16;48;5;197"   # bouton Red Pill — noir gras sur fond rouge
+T_BTN = "1;38;5;16;48;5;46"    # boutons — noir gras sur fond vert Matrix
 
 
 def start_of_today():
