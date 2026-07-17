@@ -118,7 +118,8 @@ def resolve_channel(cwd, config):
 
 
 def _prune(sessions, now):
-    for uuid in [u for u, e in sessions.items() if not _active(e, now)]:
+    for uuid in [u for u, e in sessions.items()
+                 if not _active(e, now) and not e.get("paused") and not e.get("waiting")]:
         del sessions[uuid]
 
 
@@ -185,6 +186,58 @@ def free(session_id):
         if entry is not None:
             _save_state(state)
         return entry
+
+
+def _ensure_entry(sessions, sid, cwd, now):
+    """Renvoie l'entrée de `sid`, en créant une entrée minimale si absente."""
+    entry = sessions.get(sid)
+    if entry is None:
+        entry = {"cwd": cwd, "started": now, "seen": now}
+        sessions[sid] = entry
+    return entry
+
+
+def set_paused(sid, note=None, cwd=None):
+    """Marque une session en pause (manuel, durable). Crée l'entrée au besoin."""
+    now = time.time()
+    with _Lock():
+        state = _load_state()
+        entry = _ensure_entry(state["sessions"], sid, cwd, now)
+        entry["paused"] = {"note": note or "", "since": now}
+        _save_state(state)
+        return entry
+
+
+def clear_paused(sid):
+    """Lève le flag pause (idempotent)."""
+    with _Lock():
+        state = _load_state()
+        entry = state["sessions"].get(sid)
+        if entry and "paused" in entry:
+            del entry["paused"]
+            _save_state(state)
+
+
+def paused_sessions():
+    """Sessions en pause, plus récentes d'abord, jointes au transcript pour label/cwd."""
+    state = _load_state()
+    out = []
+    for sid, e in state["sessions"].items():
+        p = e.get("paused")
+        if not p:
+            continue
+        cwd = e.get("cwd") or ""
+        out.append({
+            "sid": sid,
+            "cwd": cwd,
+            "project": os.path.basename(cwd.rstrip("/")) if cwd else "?",
+            "agent": e.get("agent"),
+            "label": session_label(sid, cwd),
+            "note": p.get("note", ""),
+            "since": p.get("since", 0),
+        })
+    out.sort(key=lambda s: s["since"], reverse=True)
+    return out
 
 
 def bind_window(session_id, window_id=None, listen_on=None):
