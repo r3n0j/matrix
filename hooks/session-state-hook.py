@@ -54,6 +54,7 @@ def handle(action, payload):
         elif action == "busy":       # UserPromptSubmit : le tour démarre
             matrix_lib.set_busy(sid, cwd=payload.get("cwd"))
             matrix_lib.clear_waiting(sid)
+            matrix_lib.clear_paused(sid)  # activité réelle → sortie de veille (resume)
         elif action == "clear":      # Stop : tour terminé
             matrix_lib.clear_busy(sid)
             matrix_lib.clear_waiting(sid)

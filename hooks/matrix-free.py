@@ -27,6 +27,12 @@ def main():
         return
     try:
         import matrix_lib
+        existing = matrix_lib.get(session_id)
+        if existing and existing.get("paused"):
+            # Mise en veille manuelle : doit survivre à la fermeture de la fenêtre
+            # (sinon perte du flag paused → la session disparaît de ccs au niveau
+            # normal, masquée comme une simple session idle/unplugged).
+            return
         entry = matrix_lib.free(session_id)
         agent = (entry or {}).get("agent")
         token = matrix_lib.bot_token(matrix_lib.SYSTEM_BOT)  # Neo
