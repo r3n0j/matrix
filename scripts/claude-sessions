@@ -479,6 +479,8 @@ def collect(include_agents, with_tokens=False):
         s["agent"] = e.get("agent")
         s["mx_window"] = e.get("kitty_window_id")
         s["mx_socket"] = e.get("kitty_listen_on")
+        s["paused"] = e.get("paused")
+        s["waiting"] = e.get("waiting")
         cn = s.get("custom_name")
         # ne garder le /rename que s'il est distinct (pas un persona, pas l'ai-title)
         s["custom_name"] = cn if (cn and cn not in pool and cn != s.get("title")) else None
@@ -579,6 +581,19 @@ def ctx_cell(n, ctx_max):
     return c(code, txt)
 
 
+def state_marker(s):
+    """Marqueur combiné de la colonne d'état : ⏸ (paused), ❓ (waiting), les deux, ou vide."""
+    return ("⏸" if s.get("paused") else "") + ("❓" if s.get("waiting") else "")
+
+
+def state_last_age(s, now):
+    """Âge affiché en colonne LAST : depuis le plus récent de paused.since/waiting.since
+    si l'un est posé, sinon depuis mtime (activité)."""
+    stamps = [f.get("since", 0) for f in (s.get("paused"), s.get("waiting")) if f]
+    ref = max(stamps) if stamps else s["mtime"]
+    return now - ref
+
+
 def render(sessions, include_agents, paused=None, interval=None, full=False,
            sel=-1, sort_mode=0, ctx_max=200000, top=0, query="", searching=False,
            hide_idle=False):
@@ -626,10 +641,10 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
 
     # ---- Tableau encadré. MODEL toujours affiché ; LAST PROMPT prend le reste. ----
     if full:
-        fixed = [("PROJECT", 16), ("STATUS", 16), ("AGENT", 15), ("HOST", 7), ("TITLE", 16), ("LAST", 6),
+        fixed = [("PROJECT", 16), ("STATUS", 16), ("AGENT", 15), ("HOST", 7), ("⏸", 3), ("TITLE", 16), ("LAST", 6),
                  ("AGE", 6), ("CTX", 6), ("OUT", 6), ("COST", 7), ("MODEL", 12)]
     else:
-        fixed = [("PROJECT", 16), ("STATUS", 16), ("AGENT", 15), ("HOST", 7), ("TITLE", 26), ("LAST", 6),
+        fixed = [("PROJECT", 16), ("STATUS", 16), ("AGENT", 15), ("HOST", 7), ("⏸", 3), ("TITLE", 26), ("LAST", 6),
                  ("AGE", 6), ("MODEL", 12)]
     sep = 2
     box_w = term.columns
@@ -653,7 +668,8 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
         table.append(c(T_DIM, "(no sessions today)"))
     for idx in range(top, min(top + rows, n)):
         s = sessions[idx]
-        st, last = status(s, now)
+        st, _ = status(s, now)
+        last = state_last_age(s, now)
         started = s.get("started")
         age = (now - started) if started else last
         proj = c(T_DIM, trunc(s["project"], 7) + " [bg]") if s.get("background") \
@@ -661,7 +677,8 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
         model = pad(c(model_color(s.get("model")), trunc(short_model(s.get("model")), 12)), 12)
         ag = s.get("agent")
         agent_cell = c(T_GREEN, trunc(ag, 15)) if ag else c(T_DIM, "—")
-        cells = [pad(proj, 16), pad(st, 16), pad(agent_cell, 15), pad(host_cell(s), 7)]
+        mark = pad(c(T_ACTIVE, state_marker(s)), 3)
+        cells = [pad(proj, 16), pad(st, 16), pad(agent_cell, 15), pad(host_cell(s), 7), mark]
         if full:
             cells += [pad(title_cell(s, 16), 16), pad(fmt_age(last), 6),
                       pad(fmt_age(age), 6),
