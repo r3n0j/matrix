@@ -551,6 +551,9 @@ def main():
                 continue
             return launch_new(res[0], res[1])
         if choice.get("_wake"):
+            sys.stderr.write("\n\033[32mWake up, Neo…\033[0m\n\n")
+            sys.stderr.flush()
+            time.sleep(0.6)
             for p in m.paused_sessions():
                 cwd = p.get("cwd")
                 try:

@@ -1055,6 +1055,9 @@ def wake_all():
     """Réveille toutes les sessions en pause (focus/rouvre chacune), efface leur flag.
     Renvoie le nombre de sessions traitées."""
     import matrix_lib
+    sys.stderr.write("\n\033[32mWake up, Neo…\033[0m\n\n")
+    sys.stderr.flush()
+    time.sleep(0.6)
     paused = matrix_lib.paused_sessions()
     for p in paused:
         try:
