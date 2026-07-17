@@ -1,0 +1,6 @@
+# Monitoring — sessions Claude (ccs) + MR/pipelines GitLab (gtlb)
+# Lancement : kitty --session ~/.config/kitty/sessions/ccs-gtlb.session
+new_tab ccs + gtlb
+layout fat:bias=50
+launch --title "ccs"  zsh -is eval 'ccs'
+launch --title "gtlb" zsh -is eval 'gtlb watch'
