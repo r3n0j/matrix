@@ -2,9 +2,12 @@
 """Hook d'état de session (découplé de la notification).
 
 Usage (payload JSON du hook sur stdin) :
-  session-state-hook.py set    -> Notification    : Claude attend une réponse (waiting)
-  session-state-hook.py busy   -> UserPromptSubmit : le tour démarre (busy, + clear waiting)
-  session-state-hook.py clear  -> Stop            : tour terminé (clear busy + waiting)
+  session-state-hook.py set    -> Notification              : Claude attend une réponse — permission
+                                                              (waiting ; ignore la notif d'inactivité)
+  session-state-hook.py ask    -> PreToolUse/AskUserQuestion : Claude pose une question (waiting)
+  session-state-hook.py unask  -> PostToolUse/AskUserQuestion: réponse reçue (clear waiting)
+  session-state-hook.py busy   -> UserPromptSubmit           : le tour démarre (busy ; clear waiting/done)
+  session-state-hook.py clear  -> Stop                       : tour terminé (clear busy/waiting ; set done)
 
 N'envoie AUCUNE notification (c'est le rôle de notify-event.py). Ne lève jamais.
 """
@@ -12,9 +15,9 @@ import json
 import os
 import sys
 
-SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPTS_DIR = os.path.join(os.path.expanduser("~"), ".claude", "scripts")
 if SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, SCRIPTS_DIR)
+    sys.path.insert(0, SCRIPTS_DIR)  # pour importer matrix_lib
 
 
 def read_payload():
@@ -48,16 +51,25 @@ def handle(action, payload):
         if not sid or is_background(payload):
             return
         import matrix_lib
-        if action == "set":          # Notification : Claude attend une réponse
+        if action == "set":          # Notification : permission demandée
+            message = payload.get("message") or ""
+            if "waiting for your input" in message.lower():
+                return               # notif d'inactivité, pas une vraie attente
+            matrix_lib.set_waiting(sid, message=message, cwd=payload.get("cwd"))
+        elif action == "ask":        # PreToolUse/AskUserQuestion : question posée
             matrix_lib.set_waiting(sid, message=payload.get("message"),
                                    cwd=payload.get("cwd"))
+        elif action == "unask":      # PostToolUse/AskUserQuestion : réponse reçue
+            matrix_lib.clear_waiting(sid)
         elif action == "busy":       # UserPromptSubmit : le tour démarre
             matrix_lib.set_busy(sid, cwd=payload.get("cwd"))
             matrix_lib.clear_waiting(sid)
+            matrix_lib.clear_done(sid)
             matrix_lib.clear_paused(sid)  # activité réelle → sortie de veille (resume)
         elif action == "clear":      # Stop : tour terminé
             matrix_lib.clear_busy(sid)
             matrix_lib.clear_waiting(sid)
+            matrix_lib.set_done(sid, cwd=payload.get("cwd"))
     except Exception:
         pass
 

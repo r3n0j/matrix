@@ -312,6 +312,29 @@ def clear_busy(sid):
             _save_state(state)
 
 
+def set_done(sid, cwd=None):
+    """Marque une session « au repos » : le tour est terminé et rien n'est en
+    cours (posé sur Stop, levé sur UserPromptSubmit). Distinct de `waiting`, qui
+    signale une attente active d'une réponse (question/permission)."""
+    now = time.time()
+    with _Lock():
+        state = _load_state()
+        entry = _ensure_entry(state["sessions"], sid, cwd, now)
+        entry["done"] = {"since": now}
+        _save_state(state)
+        return entry
+
+
+def clear_done(sid):
+    """Lève le flag « au repos » (idempotent ; posé sur UserPromptSubmit)."""
+    with _Lock():
+        state = _load_state()
+        entry = state["sessions"].get(sid)
+        if entry and "done" in entry:
+            del entry["done"]
+            _save_state(state)
+
+
 def paused_sessions():
     """Sessions en pause, plus récentes d'abord, jointes au transcript pour label/cwd."""
     state = _load_state()

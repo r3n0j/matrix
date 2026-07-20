@@ -86,6 +86,7 @@ T_DIM = "38;5;244"             # texte secondaire / idle — gris
 T_GREEN = "38;5;42"
 T_YELLOW = "38;5;214"
 T_RED = "38;5;197"
+T_STANDBY = "38;5;110"         # tour terminé, au repos — bleu-gris
 T_CURSOR = "38;5;16;48;5;51"   # ligne sélectionnée — noir sur fond aqua
 T_BTN = "1;38;5;16;48;5;46"    # boutons — noir gras sur fond vert Matrix
 
@@ -346,18 +347,19 @@ def kill_candidates(sess, procs):
 
 STATUS_META = {  # état → (couleur, libellé thème Matrix) — glyphes mono-cellule
     "paused": (T_LBL, "‖ paused"),      # flag manuel (veille)
-    "knocking": (T_YELLOW, "◑ knocking"),  # flag waiting fiable (hook « Knock knock »)
+    "knocking": (T_YELLOW, "◑ knocking"),  # flag waiting (AskUserQuestion / permission)
     "live": (T_ACTIVE, "● jacked in"),
     "active": (T_ACTIVE, "● in the matrix"),
+    "standby": (T_STANDBY, "◇ standby"),  # flag done : tour terminé, au repos
     "idle": (T_DIM, "○ unplugged"),
 }
 
 
 def status_kind(sess, now):
     """État de la session + âge depuis mtime. Les flags explicites priment :
-    paused (manuel) puis knocking (waiting, hook fiable), puis la liveness du
-    process, puis l'activité récente. L'ancienne heuristique d'âge ne produit
-    plus « awaiting » (au-delà du seuil d'activité → unplugged)."""
+    paused (manuel), knocking (waiting : AskUserQuestion/permission), puis
+    l'activité réelle (busy/working/prompt), puis standby (done : tour terminé
+    et terminal encore ouvert), enfin la liveness/âge (live, sinon unplugged)."""
     age = now - sess["mtime"]
     if sess.get("paused"):
         return "paused", age
@@ -369,6 +371,8 @@ def status_kind(sess, now):
         return "active", age    # fallback : outil/subagent en cours (dernier msg = tool_use)
     if sess["last_msg_type"] == "user" and age < RESPONDING_MAX:
         return "active", age    # prompt envoyé, Claude travaille dessus
+    if sess.get("done") and sess.get("live"):
+        return "standby", age   # Stop reçu, rien en cours, terminal encore ouvert
     if age < ACTIVE_MAX:
         return "active", age    # activité transcript très récente
     if sess.get("live"):  # process vivant (--resume/--session-id) mais pas d'activité récente
@@ -543,6 +547,7 @@ def collect(include_agents, with_tokens=False):
         s["mx_socket"] = e.get("kitty_listen_on")
         s["paused"] = e.get("paused")
         s["waiting"] = e.get("waiting")
+        s["done"] = e.get("done")
         s["busy"] = e.get("busy")
         cn = s.get("custom_name")
         # ne garder le /rename que s'il est distinct (pas un persona, pas l'ai-title)
@@ -646,9 +651,9 @@ def ctx_cell(n, ctx_max):
 
 
 def state_last_age(s, now):
-    """Âge affiché en colonne LAST : depuis le plus récent de paused.since/waiting.since
-    si l'un est posé, sinon depuis mtime (activité)."""
-    stamps = [f.get("since", 0) for f in (s.get("paused"), s.get("waiting")) if f]
+    """Âge affiché en colonne LAST : depuis le plus récent de
+    paused.since/waiting.since/done.since si l'un est posé, sinon depuis mtime."""
+    stamps = [f.get("since", 0) for f in (s.get("paused"), s.get("waiting"), s.get("done")) if f]
     ref = max(stamps) if stamps else s["mtime"]
     return now - ref
 
