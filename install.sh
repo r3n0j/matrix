@@ -25,7 +25,7 @@ link() {
 
 echo "Déploiement de The Matrix depuis ${REPO/#$HOME/\~}"
 chmod +x "$REPO"/scripts/construct "$REPO"/scripts/redpill "$REPO"/scripts/matrix-bots \
-         "$REPO"/scripts/claude-sessions 2>/dev/null || true
+         "$REPO"/scripts/claude-sessions "$REPO"/scripts/matrix-focus 2>/dev/null || true
 
 for f in "$REPO"/scripts/*; do link "$f" "$HOME/.claude/scripts/$(basename "$f")"; done
 for f in "$REPO"/hooks/*;   do link "$f" "$HOME/.claude/hooks/$(basename "$f")"; done
@@ -36,6 +36,7 @@ link "$REPO/kitty/kitty.desktop" "$HOME/.local/share/applications/kitty.desktop"
 link "$REPO/scripts/construct"       "$HOME/.local/bin/construct"
 link "$REPO/scripts/claude-sessions" "$HOME/.local/bin/matrix"
 link "$REPO/scripts/redpill"         "$HOME/.local/bin/redpill"
+link "$REPO/scripts/matrix-focus"    "$HOME/.local/bin/matrix-focus"
 
 echo
 echo "Terminé."

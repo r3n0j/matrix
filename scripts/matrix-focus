@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Focus la fenêtre kitty « matrix + gtlb » (WM_CLASS matrix-gtlb), ou la lance si
+# absente. Câblé sur un raccourci GNOME (Super+²).
+set -euo pipefail
+KITTY="$HOME/.local/kitty.app/bin/kitty"
+wmctrl -x -a matrix-gtlb 2>/dev/null || \
+  exec "$KITTY" --class matrix-gtlb --name matrix-gtlb \
+       --session "$HOME/.config/kitty/sessions/matrix-gtlb.session"
