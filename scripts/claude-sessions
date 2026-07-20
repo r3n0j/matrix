@@ -732,17 +732,50 @@ def strip_ansi(s):
     return "".join(out)
 
 
-SORT_LABELS = ["last activity", "context", "tokens"]
-LEVEL_LABELS = ["normal", "étendu", "complet"]  # Tab : jacked-in/paused/knocking → +unplugged → +bg
+LEVEL_LABELS = ["normal", "extended", "full"]  # Tab : jacked-in/paused/knocking → +unplugged → +bg
+
+# Ordre d'attention des statuts pour le tri « status » (paused est traité à part :
+# toujours relégué en fin de liste, quel que soit le tri).
+_STATUS_RANK = {"knocking": 0, "active": 1, "standby": 2, "live": 3, "idle": 4, "paused": 5}
+
+# Tris disponibles, dans l'ordre de cyclage (touche s) ; libellé = la clé elle-même
+# (anglais). Défaut = age. Chaque entrée : (clé, fn(s, now) -> valeur, reverse, full_only).
+# reverse n'est utilisé que sur des valeurs numériques (négation dans sort_sessions).
+SORT_SPECS = [
+    ("age",           lambda s, now: s.get("started") or 0,               True,  False),
+    ("last activity", lambda s, now: s["mtime"],                          True,  False),
+    ("status",        lambda s, now: _STATUS_RANK.get(status_kind(s, now)[0], 9), False, False),
+    ("agent",         lambda s, now: (s.get("agent") or "￿").lower(), False, False),
+    ("title",         lambda s, now: (s.get("title") or "").lower(),       False, False),
+    ("project",       lambda s, now: (s.get("project") or "").lower(),     False, False),
+    ("context",       lambda s, now: s.get("context_tokens") or 0,         True,  True),
+]
+SORT_BY = {key: (fn, rev, fo) for key, fn, rev, fo in SORT_SPECS}
+SORT_LABEL_W = max(len(key) for key, *_ in SORT_SPECS)  # largeur fixe (col1 d'en-tête stable)
 
 
-def sort_sessions(sessions, mode):
-    if mode == 1:
-        sessions.sort(key=lambda s: s.get("context_tokens") or 0, reverse=True)
-    elif mode == 2:
-        sessions.sort(key=lambda s: s.get("output_total") or 0, reverse=True)
-    else:
-        sessions.sort(key=lambda s: s["mtime"], reverse=True)
+def available_sorts(full):
+    """Clés de tri proposées selon la vue : `context` seulement en vue complet."""
+    return [key for key, _fn, _rev, fo in SORT_SPECS if full or not fo]
+
+
+def next_sort(sort_key, full):
+    """Clé de tri suivante dans le cycle des tris disponibles pour la vue."""
+    keys = available_sorts(full)
+    if sort_key not in keys:
+        return keys[0]
+    return keys[(keys.index(sort_key) + 1) % len(keys)]
+
+
+def sort_sessions(sessions, sort_key):
+    """Trie en place selon `sort_key`. Les sessions en pause sont toujours
+    reléguées en fin de liste (clé composée), quel que soit le critère."""
+    fn, rev, _fo = SORT_BY.get(sort_key, SORT_BY["age"])
+    now = time.time()
+    def key(s):
+        v = fn(s, now)
+        return (bool(s.get("paused")), -v if rev else v)
+    sessions.sort(key=key)
     return sessions
 
 
@@ -765,7 +798,7 @@ def state_last_age(s, now):
 
 
 def render(sessions, include_agents, paused=None, interval=None, full=False,
-           sel=-1, sort_mode=0, ctx_max=200000, top=0, query="", searching=False,
+           sel=-1, sort_key="age", ctx_max=200000, top=0, query="", searching=False,
            hide_idle=False, level=0):
     now = time.time()
     when = time.strftime("%H:%M:%S", time.localtime(now))
@@ -777,7 +810,7 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
     if paused is not None:  # mode live
         col1 = [
             kv("Sessions", n),
-            kv("Sort", SORT_LABELS[sort_mode]),
+            kv("Sort", sort_key.ljust(SORT_LABEL_W)),
             kv("View", LEVEL_LABELS[level]),
             kv("Refresh", "paused" if paused else "%ds" % interval),
             kv("Updated", when),
@@ -1238,7 +1271,7 @@ def run_live(opts):
     level = 2 if (opts["all"] or opts["full"]) else 0  # 0 normal · 1 étendu · 2 complet
     show_all, hide_idle, full = level == 2, level == 0, level == 2
     paused = False
-    sort_mode = 0
+    sort_key = "age"
     sel = 0
     ctx_max = opts["ctx_max"]
     query = ""            # filtre actif
@@ -1249,21 +1282,21 @@ def run_live(opts):
     if not sys.stdin.isatty():  # non interactif (pipe, watch…) : refresh simple
         while True:
             sys.stdout.write("\033[H\033[J")
-            s = drop_idle(sort_sessions(collect(show_all, with_tokens=full), sort_mode),
+            s = drop_idle(sort_sessions(collect(show_all, with_tokens=full), sort_key),
                           hide_idle)
             sys.stdout.write(render(s, show_all, paused=False,
                              interval=opts["interval"], full=full,
-                             sort_mode=sort_mode, ctx_max=ctx_max,
+                             sort_key=sort_key, ctx_max=ctx_max,
                              hide_idle=hide_idle, level=level) + "\n")
             sys.stdout.flush()
             time.sleep(opts["interval"])
         return
 
     def need_tokens():
-        return full or sort_mode in (1, 2)
+        return full or sort_key == "context"
 
     def refresh():
-        return sort_sessions(collect(show_all, with_tokens=need_tokens()), sort_mode)
+        return sort_sessions(collect(show_all, with_tokens=need_tokens()), sort_key)
 
     old = termios.tcgetattr(sys.stdin)
     tty.setcbreak(sys.stdin.fileno())
@@ -1292,7 +1325,7 @@ def run_live(opts):
                 top = max(0, min(top, max(0, len(view) - rows)))
                 screen_str = render(view, show_all, paused=paused,
                                     interval=opts["interval"], full=full, sel=sel,
-                                    sort_mode=sort_mode, ctx_max=ctx_max, top=top,
+                                    sort_key=sort_key, ctx_max=ctx_max, top=top,
                                     query=query, searching=searching,
                                     hide_idle=hide_idle, level=level)
                 sys.stdout.write("\033[H\033[J")
@@ -1371,13 +1404,15 @@ def run_live(opts):
                     sel = 0
                 elif k in ("G", "END"):
                     sel = (len(view) - 1) if view else 0
-                elif k == "\t":  # Tab : cycle normal → étendu → complet
+                elif k == "\t":  # Tab : cycle normal → extended → full
                     level = (level + 1) % 3
                     show_all, hide_idle, full = level == 2, level == 0, level == 2
+                    if sort_key not in available_sorts(full):
+                        sort_key = "age"  # ex. context n'est plus proposé hors vue complet
                     sessions = refresh()
                     sel = 0
                 elif k in ("s", "S"):
-                    sort_mode = (sort_mode + 1) % 3
+                    sort_key = next_sort(sort_key, full)
                     sessions = refresh()
                     sel = 0
                 elif k in ("p", "P"):
