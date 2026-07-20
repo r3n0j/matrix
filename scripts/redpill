@@ -189,7 +189,7 @@ def _visible_rows():
         return 12
 
 
-def select(items, render, filter_key, crumbs, quote, subhead, hint, detail=None):
+def select(items, render, filter_key, crumbs, quote, subhead, hint, detail=None, initial=0):
     """Sélecteur interactif : renvoie l'item choisi, BACK si Échap, None si Ctrl-C,
     NOTTY si pas de TTY.
 
@@ -207,7 +207,7 @@ def select(items, render, filter_key, crumbs, quote, subhead, hint, detail=None)
         return NOTTY
 
     old = termios.tcgetattr(fd)
-    query, idx, top, prev_lines = "", 0, 0, 0
+    query, idx, top, prev_lines = "", initial, 0, 0
     rows = _visible_rows()
     start_row, mouse = None, False
     crumb_line = _crumbs_line(crumbs)
@@ -538,7 +538,8 @@ def main():
         quote = "%sThe Matrix has you…%s" % (GREEN, RESET)
         subhead = "%schoisis ta réalité%s" % (BRIGHT, RESET)
         hint = "↑↓ · tape pour filtrer · clic · ⏎ · Échap = session ici"
-        choice = select(items, render, fkey, [], quote, subhead, hint, detail)
+        choice = select(items, render, fkey, [], quote, subhead, hint, detail,
+                        initial=items.index(new_entry))
 
         if choice is NOTTY:
             return main_fallback(sessions, now)
