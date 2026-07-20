@@ -823,7 +823,7 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
                 hk("<w>", "wake"), hk("<o>", "detail"), hk("<^K>", "kill")]
         mtx = [c(T_LBL, "General"),
                hk("<p>", "pause"), hk("<F5>", "refresh"), hk("<q>", "quit")]
-        out = side_by_side([col1, nav, sess, mtx])
+        out = side_by_side([col1, mtx, nav, sess])
         # Boutons souris SOUS le bloc colonnes : hors de la zone bannière (BANNER_ROWS
         # lignes). Les emoji ⏰/💊 sont double-largeur alors que overlay_right/vis
         # supposent des glyphes demi-largeur ; sur une ligne pairée à une rangée du
