@@ -1,8 +1,64 @@
-#!/usr/bin/env bash
-# Focus la fenêtre kitty « matrix + gtlb » (WM_CLASS matrix-gtlb), ou la lance si
-# absente. Câblé sur un raccourci GNOME (Super+²).
-set -euo pipefail
-KITTY="$HOME/.local/kitty.app/bin/kitty"
-wmctrl -x -a matrix-gtlb 2>/dev/null || \
-  exec "$KITTY" --class matrix-gtlb --name matrix-gtlb \
-       --session "$HOME/.config/kitty/sessions/matrix-gtlb.session"
+#!/usr/bin/env python3
+"""matrix-focus [matrix|gtlb] : ouvre/focus la fenêtre kitty « matrix + gtlb » et
+donne le focus au panneau demandé (matrix = moniteur de sessions, gtlb = MR/pipelines).
+Lance la session si la fenêtre n'existe pas. Câblé sur Super+W (matrix) / Super+X (gtlb).
+
+S'appuie sur le remote control kitty (allow_remote_control + listen_on unix:/tmp/kitty-*).
+Le panneau est repéré par son titre (launch --title dans la session), avec repli sur
+l'ordre des fenêtres (0 = matrix, 1 = gtlb) si le titre a été réécrit."""
+import glob
+import json
+import os
+import subprocess
+import sys
+
+PANE = "gtlb" if (len(sys.argv) > 1 and sys.argv[1] == "gtlb") else "matrix"
+HOME = os.path.expanduser("~")
+KITTY = os.path.join(HOME, ".local/kitty.app/bin/kitty")
+KITTEN = os.path.join(HOME, ".local/kitty.app/bin/kitten")
+SESSION = os.path.join(HOME, ".config/kitty/sessions/matrix-gtlb.session")
+
+
+def run(args):
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=3)
+    except Exception:
+        return None
+
+
+def locate():
+    """(socket, window_id) du panneau PANE de l'instance matrix-gtlb, ou (None, None)."""
+    for sock in glob.glob("/tmp/kitty-*"):
+        r = run([KITTEN, "@", "--to", "unix:" + sock, "ls"])
+        if not r or r.returncode != 0:
+            continue
+        try:
+            data = json.loads(r.stdout)
+        except ValueError:
+            continue
+        for osw in data:
+            wins = [w for tab in osw.get("tabs", []) for w in tab.get("windows", [])]
+            titles = [w.get("title", "") for w in wins]
+            if osw.get("wm_class") != "matrix-gtlb" and "gtlb" not in titles:
+                continue
+            for w in wins:                       # match par titre si conservé
+                if w.get("title") == PANE:
+                    return sock, w.get("id")
+            idx = 1 if PANE == "gtlb" else 0     # repli : ordre de création
+            if wins:
+                return sock, wins[min(idx, len(wins) - 1)].get("id")
+    return None, None
+
+
+def main():
+    sock, wid = locate()
+    if sock is None:  # fenêtre absente -> lancer la session (focus initial = matrix)
+        os.execv(KITTY, [KITTY, "--class", "matrix-gtlb", "--name", "matrix-gtlb",
+                         "--session", SESSION])
+    if wid is not None:
+        run([KITTEN, "@", "--to", "unix:" + sock, "focus-window", "--match", "id:%d" % wid])
+    run(["wmctrl", "-x", "-a", "matrix-gtlb"])   # fenêtre OS au premier plan
+
+
+if __name__ == "__main__":
+    main()
