@@ -1,12 +1,12 @@
 [Desktop Entry]
 Version=1.0
-Name=ccs + gtlb
+Name=matrix + gtlb
 GenericName=Monitoring Matrix
-Comment=Sessions Claude (ccs) + MR/pipelines GitLab (gtlb)
-Exec=/home/r3n0j/.local/kitty.app/bin/kitty --class matrix-gtlb --name matrix-gtlb --session /home/r3n0j/.config/kitty/sessions/ccs-gtlb.session
+Comment=Sessions Claude (matrix) + MR/pipelines GitLab (gtlb)
+Exec=/home/r3n0j/.local/kitty.app/bin/kitty --class matrix-gtlb --name matrix-gtlb --session /home/r3n0j/.config/kitty/sessions/matrix-gtlb.session
 Icon=/home/r3n0j/matrix/kitty/matrix-gtlb.svg
 StartupWMClass=matrix-gtlb
 Type=Application
 Terminal=false
 Categories=System;Monitor;
-Keywords=matrix;ccs;gtlb;gitlab;claude;monitoring;
+Keywords=matrix;gtlb;gitlab;claude;monitoring;

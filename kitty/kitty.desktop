@@ -8,7 +8,7 @@ Icon=/home/r3n0j/.local/kitty.app/share/icons/hicolor/scalable/apps/kitty.svg
 Type=Application
 Terminal=false
 Categories=System;TerminalEmulator;
-Actions=red-pill;the-matrix;gtlb;ccs-gtlb;monitoring-prod;monitoring-develop;monitoring-local;
+Actions=red-pill;the-matrix;gtlb;matrix-gtlb;monitoring-prod;monitoring-develop;monitoring-local;
 
 [Desktop Action red-pill]
 Name=Red Pill
@@ -16,17 +16,17 @@ Exec=/home/r3n0j/.local/kitty.app/bin/kitty zsh -ic redpill
 
 [Desktop Action the-matrix]
 Name=The Matrix
-Exec=/home/r3n0j/.local/kitty.app/bin/kitty --config /home/r3n0j/.config/kitty/matrix-window.conf --title "The Matrix" zsh -ic ccs
+Exec=/home/r3n0j/.local/kitty.app/bin/kitty --config /home/r3n0j/.config/kitty/matrix-window.conf --title "The Matrix" zsh -ic matrix
 
 [Desktop Action gtlb]
 Name=gtlb
 Icon=/home/r3n0j/matrix/kitty/gtlb.svg
 Exec=/home/r3n0j/.local/kitty.app/bin/kitty --title gtlb zsh -ic "gtlb watch"
 
-[Desktop Action ccs-gtlb]
-Name=ccs + gtlb
+[Desktop Action matrix-gtlb]
+Name=matrix + gtlb
 Icon=/home/r3n0j/matrix/kitty/gtlb.svg
-Exec=/home/r3n0j/.local/kitty.app/bin/kitty --session /home/r3n0j/.config/kitty/sessions/ccs-gtlb.session
+Exec=/home/r3n0j/.local/kitty.app/bin/kitty --session /home/r3n0j/.config/kitty/sessions/matrix-gtlb.session
 
 [Desktop Action monitoring-local]
 Name=Monitoring local

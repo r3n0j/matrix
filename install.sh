@@ -24,7 +24,7 @@ link() {
 }
 
 echo "Déploiement de The Matrix depuis ${REPO/#$HOME/\~}"
-chmod +x "$REPO"/scripts/matrix "$REPO"/scripts/redpill "$REPO"/scripts/matrix-bots \
+chmod +x "$REPO"/scripts/construct "$REPO"/scripts/redpill "$REPO"/scripts/matrix-bots \
          "$REPO"/scripts/claude-sessions 2>/dev/null || true
 
 for f in "$REPO"/scripts/*; do link "$f" "$HOME/.claude/scripts/$(basename "$f")"; done
@@ -32,8 +32,10 @@ for f in "$REPO"/hooks/*;   do link "$f" "$HOME/.claude/hooks/$(basename "$f")";
 for f in "$REPO"/kitty/*.conf; do link "$f" "$HOME/.config/kitty/$(basename "$f")"; done
 for f in "$REPO"/kitty/sessions/*.session; do link "$f" "$HOME/.config/kitty/sessions/$(basename "$f")"; done
 link "$REPO/kitty/kitty.desktop" "$HOME/.local/share/applications/kitty.desktop"
-link "$REPO/scripts/matrix"  "$HOME/.local/bin/matrix"
-link "$REPO/scripts/redpill" "$HOME/.local/bin/redpill"
+# Commandes : construct = lanceur (loading program), matrix = moniteur TUI (ex-ccs).
+link "$REPO/scripts/construct"       "$HOME/.local/bin/construct"
+link "$REPO/scripts/claude-sessions" "$HOME/.local/bin/matrix"
+link "$REPO/scripts/redpill"         "$HOME/.local/bin/redpill"
 
 echo
 echo "Terminé."

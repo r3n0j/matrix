@@ -1,0 +1,6 @@
+# Monitoring — sessions Claude (matrix) + MR/pipelines GitLab (gtlb)
+# Lancement : kitty --session ~/.config/kitty/sessions/matrix-gtlb.session
+new_tab matrix + gtlb
+layout fat:bias=50
+launch --title "matrix"  zsh -is eval '~/.claude/scripts/claude-sessions'
+launch --title "gtlb" zsh -is eval 'gtlb watch'

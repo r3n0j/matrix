@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""matrix / redpill — lance une session Claude personnifiée (The Matrix).
+"""construct / redpill — lance une session Claude personnifiée (The Matrix).
+
+Le Construct est le programme de chargement du film : on y « charge » une session.
 
 Usage :
-  matrix                     # personnifie le repo courant (cwd), lance claude
-  matrix [args claude...]    # idem, en passant des options à claude
-  matrix resume <uuid>       # reprend une session en conservant son persona
+  construct                     # personnifie le repo courant (cwd), lance claude
+  construct [args claude...]    # idem, en passant des options à claude
+  construct resume <uuid>       # reprend une session en conservant son persona
 
 Assigne un persona (Agent Smith…), route vers le salon Discord du repo (via le
 webhook, dans notify-event.py), enregistre KITTY_WINDOW_ID + KITTY_LISTEN_ON
-pour le focus depuis ccs, puis exec claude. Le nom d'agent est passé à
+pour le focus depuis matrix, puis exec claude. Le nom d'agent est passé à
 `claude --name` → il remonte au titre de la fenêtre (dynamique, non figé).
 
 MATRIX_DRY_RUN=1 : affiche ce qui serait fait sans lancer claude (test).

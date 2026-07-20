@@ -4,7 +4,7 @@
 Menu au lancement (sélecteur interactif : ↑↓ pour naviguer, tape pour filtrer,
 Entrée pour valider) :
   - liste des sessions récentes → sélection directe = reprise personnifiée
-    (`matrix resume <uuid>` dans le dossier de la session) ;
+    (`construct resume <uuid>` dans le dossier de la session) ;
   - entrée « ＋ nouvelle session… » = wizard nouvelle session (repo → nom) ;
   - Échap sur le menu = nouvelle session directe dans le dossier courant.
 
@@ -435,9 +435,9 @@ def ask_name(crumbs):
     return res or None
 
 
-def matrix_argv(name):
-    """Argv du lanceur matrix pour une nouvelle session, avec nom optionnel."""
-    return ["matrix", "--name", name] if name else ["matrix"]
+def construct_argv(name):
+    """Argv du lanceur construct pour une nouvelle session, avec nom optionnel."""
+    return ["construct", "--name", name] if name else ["construct"]
 
 
 def new_session_wizard():
@@ -465,18 +465,18 @@ def launch_new(target, name):
         os.chdir(target)
     except OSError:
         os.chdir(HOME)
-    os.execvp("matrix", matrix_argv(name))
+    os.execvp("construct", construct_argv(name))
 
 
 def launch_new_cwd():
     """Nouvelle session dans le dossier courant, sans étape de choix."""
-    os.execvp("matrix", ["matrix"])
+    os.execvp("construct", ["construct"])
 
 
 def resume_session(s):
     if s.get("cwd") and os.path.isdir(s["cwd"]):
         os.chdir(s["cwd"])
-    os.execvp("matrix", ["matrix", "resume", s["sid"]])
+    os.execvp("construct", ["construct", "resume", s["sid"]])
 
 
 def main():
@@ -561,7 +561,7 @@ def main():
                 try:
                     import subprocess
                     subprocess.Popen(["kitty", "--directory", cwd or HOME,
-                                      "zsh", "-ic", "matrix resume %s" % p["sid"]],
+                                      "zsh", "-ic", "construct resume %s" % p["sid"]],
                                      start_new_session=True,
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     m.clear_paused(p["sid"])

@@ -1449,7 +1449,7 @@ def run_live(opts):
         sys.stdout.flush()
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old)
 
-    # Reprise demandée : on remplace ccs par `claude --resume <id>` dans le cwd de la session.
+    # Reprise demandée : on remplace matrix par `claude --resume <id>` dans le cwd de la session.
     if resume_target:
         cwd = resume_target.get("cwd")
         if cwd and os.path.isdir(cwd):

@@ -4,7 +4,7 @@
 Appelé sur SessionStart et Stop. Session personnifiée (The Matrix) →
 « <Agent> — <libellé> » ; sinon « Claude — <libellé> ». Le libellé (nom /rename
 réel > ai-title > dossier) vient de `matrix_lib.session_label`. Assigne/retrouve
-le persona et re-lie la fenêtre kitty courante (pour le focus depuis ccs).
+le persona et re-lie la fenêtre kitty courante (pour le focus depuis matrix).
 
 Silencieux et non bloquant. Ne fait rien hors d'une fenêtre kitty (pas de
 KITTY_WINDOW_ID) — donc pas d'effet sur les sessions d'agents / headless.

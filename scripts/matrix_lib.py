@@ -2,7 +2,7 @@
 
 Registre des sessions personnifiées : config statique (config.json) + état live
 (state.json) muté sous verrou flock. Utilisé par notify-event.py (assignation
-paresseuse + routage webhook), le lanceur `matrix` et ccs.
+paresseuse + routage webhook), le lanceur `construct` et le moniteur `matrix`.
 """
 import fcntl
 import glob
@@ -358,7 +358,7 @@ def paused_sessions():
 
 
 def bind_window(session_id, window_id=None, listen_on=None):
-    """Met à jour la fenêtre kitty liée à la session (focus ccs), après un resume p.ex."""
+    """Met à jour la fenêtre kitty liée à la session (focus matrix), après un resume p.ex."""
     if not (window_id or listen_on):
         return
     with _Lock():
