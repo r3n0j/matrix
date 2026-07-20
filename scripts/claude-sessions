@@ -18,7 +18,7 @@ Options :
   --once / -1     snapshot puis rend la main
   --all  / -a     démarre au niveau complet (inclut les sessions de fond)
   --full / -f     démarre au niveau complet (colonnes tokens/coût)
-  --interval N    intervalle de rafraîchissement en s (défaut 60)
+  --interval N    intervalle de rafraîchissement en s (défaut 10)
   --ctx-max N     seuil pour la couleur de CTX (défaut 200000)
 
 Touches (mode live) :
@@ -138,17 +138,23 @@ def model_color(model):
     return T_VAL
 
 
-def parse_session(path, with_tokens=False):
-    """Retourne un dict décrivant la session, ou None si illisible.
+# Cache de parsing par transcript, invalidé au changement de mtime : une session
+# inchangée n'est jamais relue. path -> {mtime, size, data, with_tokens}.
+_PARSE_CACHE = {}
 
-    with_tokens : parse aussi l'usage de tous les messages assistant pour la
-    taille de contexte et le cumul de tokens (plus coûteux ; off par défaut)."""
-    try:
-        with open(path) as f:
-            lines = f.readlines()
-    except Exception:
-        return None
+# Champs recalculés depuis la QUEUE du transcript à chaque changement (le dernier
+# message et les métadonnées de tour vivent en fin de fichier). Le reste (started,
+# entrypoint, background, is_agent, title/ai-title) est immuable ou stable : établi
+# au 1er parse complet, puis conservé.
+_RECENT_FIELDS = ("cwd", "branch", "last_msg_type", "working",
+                  "last_prompt", "custom_name", "model")
 
+
+def _scan_reversed(lines, with_tokens):
+    """Champs 'récents' + cumul tokens, par parcours à rebours (1re occurrence =
+    la plus récente). Réducteur PARTAGÉ par le parse complet et le parse par queue :
+    sur un même jeu de lignes il produit un résultat identique — c'est ce qui
+    garantit que lire la queue équivaut à lire tout le fichier pour ces champs."""
     ai_title = None
     custom_name = None
     last_prompt = None
@@ -157,7 +163,6 @@ def parse_session(path, with_tokens=False):
     last_msg_type = None
     working = None  # dernier message = tool_use assistant en cours (outil/subagent)
     is_agent = False
-    entrypoint = None
     context_tokens = None
     output_total = 0
     input_total = 0
@@ -165,7 +170,6 @@ def parse_session(path, with_tokens=False):
     cache_creation_total = 0
     model = None
 
-    # Parcours à rebours : on prend la 1re occurrence (= la plus récente) de chaque info.
     for line in reversed(lines):
         if not is_agent and '"agent-setting"' in line:
             is_agent = True
@@ -226,20 +230,25 @@ def parse_session(path, with_tokens=False):
                         context_tokens = ((u.get("input_tokens") or 0)
                                           + (u.get("cache_read_input_tokens") or 0)
                                           + (u.get("cache_creation_input_tokens") or 0))
+    return {
+        "cwd": cwd, "branch": git_branch, "last_msg_type": last_msg_type,
+        "working": bool(working),
+        "last_prompt": (last_prompt or "").replace("\n", " ").strip(),
+        "custom_name": custom_name, "model": model,
+        "ai_title": ai_title, "is_agent": is_agent,
+        "context_tokens": context_tokens, "output_total": output_total,
+        "input_total": input_total, "cache_read_total": cache_read_total,
+        "cache_creation_total": cache_creation_total,
+    }
 
-    sid = os.path.basename(path)[:-6]  # retire .jsonl
-    project = os.path.basename((cwd or os.path.dirname(path)).rstrip("/"))
-    title = ai_title or ("session " + sid[:8])
-    try:
-        mtime = os.path.getmtime(path)
-    except Exception:
-        mtime = 0
 
-    # Ouverture de la session (scan rapide du début) : 1er timestamp = création, et
-    # entrypoint du 1er message = mode de LANCEMENT réel (cli/vscode/sdk-cli). On se
-    # fie à l'ouverture, pas au dernier tour : sinon un simple `claude -p`/resume en
-    # mode print (sdk-cli) reclasserait toute une session interactive en background.
+def _scan_forward(lines):
+    """Ouverture de la session (scan rapide du début, immuable) : 1er timestamp =
+    création, entrypoint du 1er message = mode de LANCEMENT réel (cli/vscode/sdk-cli).
+    On se fie à l'ouverture, pas au dernier tour : sinon un `claude -p`/resume en mode
+    print (sdk-cli) reclasserait toute une session interactive en background."""
     started = None
+    entrypoint = None
     for line in lines:
         if started is None and '"timestamp"' in line:
             try:
@@ -254,33 +263,130 @@ def parse_session(path, with_tokens=False):
                 entrypoint = None
         if started is not None and entrypoint is not None:
             break
+    return started, entrypoint
 
-    # Session de fond (non interactive) : agent, ou lancée via SDK (cron, /morning…).
-    background = is_agent or (entrypoint == "sdk-cli")
-    cost = session_cost(input_total, cache_read_total, cache_creation_total,
-                        output_total, model) if with_tokens else None
 
+def _assemble(path, rev, started, entrypoint, with_tokens):
+    """Assemble le dict de session final à partir des champs récents (`rev`) et
+    des champs d'ouverture (`started`, `entrypoint`)."""
+    sid = os.path.basename(path)[:-6]  # retire .jsonl
+    project = os.path.basename((rev["cwd"] or os.path.dirname(path)).rstrip("/"))
+    title = rev["ai_title"] or ("session " + sid[:8])
+    try:
+        mtime = os.path.getmtime(path)
+    except Exception:
+        mtime = 0
+    background = rev["is_agent"] or (entrypoint == "sdk-cli")
+    cost = (session_cost(rev["input_total"], rev["cache_read_total"],
+                         rev["cache_creation_total"], rev["output_total"], rev["model"])
+            if with_tokens else None)
     return {
-        "sid": sid,
-        "path": path,
-        "started": started,
-        "background": background,
-        "cwd": cwd,
-        "project": project,
-        "branch": git_branch,
-        "title": title,
-        "last_prompt": (last_prompt or "").replace("\n", " ").strip(),
-        "last_msg_type": last_msg_type,
-        "working": bool(working),
-        "is_agent": is_agent,
-        "entrypoint": entrypoint,
-        "custom_name": custom_name,
-        "mtime": mtime,
-        "context_tokens": context_tokens,
-        "output_total": output_total,
-        "cost": cost,
-        "model": model,
+        "sid": sid, "path": path, "started": started, "background": background,
+        "cwd": rev["cwd"], "project": project, "branch": rev["branch"], "title": title,
+        "last_prompt": rev["last_prompt"], "last_msg_type": rev["last_msg_type"],
+        "working": rev["working"], "is_agent": rev["is_agent"],
+        "entrypoint": entrypoint, "custom_name": rev["custom_name"], "mtime": mtime,
+        "context_tokens": rev["context_tokens"], "output_total": rev["output_total"],
+        "cost": cost, "model": rev["model"],
     }
+
+
+def _read_all_lines(path):
+    try:
+        with open(path) as f:
+            return f.readlines()
+    except Exception:
+        return None
+
+
+def _read_tail_lines(path, want_bytes):
+    """Dernières ~want_bytes du fichier, en lignes. Jette la 1re ligne si la fenêtre
+    ne part pas du début (elle peut être tronquée). None si illisible."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            start = max(0, size - want_bytes)
+            f.seek(start)
+            data = f.read()
+    except Exception:
+        return None
+    lines = data.decode("utf-8", "replace").splitlines()
+    if start > 0 and lines:
+        lines = lines[1:]
+    return lines
+
+
+def _parse_full(path, with_tokens=False):
+    """Parse complet (lecture intégrale) — sert au 1er affichage d'une session et
+    au mode --full. Établit tous les champs, immuables compris."""
+    lines = _read_all_lines(path)
+    if lines is None:
+        return None
+    rev = _scan_reversed(lines, with_tokens)
+    started, entrypoint = _scan_forward(lines)
+    return _assemble(path, rev, started, entrypoint, with_tokens)
+
+
+def _parse_tail_update(path, prev):
+    """Rafraîchit les seuls champs récents depuis la queue du transcript, en gardant
+    les immuables et le titre de `prev`. Agrandit la fenêtre jusqu'à retrouver
+    last-prompt (ou avoir lu tout le fichier), sinon conserve l'ancien last_prompt."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return prev
+    lines = None
+    for want in (64_000, 256_000, 1_000_000, 4_000_000):
+        lines = _read_tail_lines(path, want)
+        if lines is None:
+            return prev
+        if any('"last-prompt"' in l for l in lines) or want >= size:
+            break
+    rev = _scan_reversed(lines, False)
+    data = dict(prev)
+    for k in _RECENT_FIELDS:
+        data[k] = rev[k]
+    if not rev["last_prompt"] and prev.get("last_prompt"):
+        data["last_prompt"] = prev["last_prompt"]  # filet : queue trop courte
+    data["project"] = os.path.basename((rev["cwd"] or os.path.dirname(path)).rstrip("/"))
+    try:
+        data["mtime"] = os.path.getmtime(path)
+    except Exception:
+        pass
+    return data
+
+
+def parse_session(path, with_tokens=False):
+    """Dict décrivant la session (ou None), avec cache par mtime.
+
+    Session inchangée → renvoyée du cache (0 lecture). Au changement : en mode
+    normal, seule la QUEUE est relue (champs récents) ; les immuables et le titre
+    sont conservés du 1er parse complet. En mode --full (tokens), reparse complet,
+    lui aussi mis en cache par mtime."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    mtime, size = st.st_mtime, st.st_size
+
+    c = _PARSE_CACHE.get(path)
+    if c and c["mtime"] == mtime and c["with_tokens"] >= with_tokens:
+        return c["data"]
+
+    # Reparse complet : 1re rencontre, mode --full, ou fichier tronqué/compacté.
+    if c is None or with_tokens or size < c["size"]:
+        data = _parse_full(path, with_tokens)
+        if data is not None:
+            _PARSE_CACHE[path] = {"mtime": mtime, "size": size,
+                                  "data": data, "with_tokens": with_tokens}
+        return data
+
+    # Mode normal, session déjà connue qui a bougé : relire seulement la queue.
+    data = _parse_tail_update(path, c["data"])
+    _PARSE_CACHE[path] = {"mtime": mtime, "size": size,
+                          "data": data, "with_tokens": False}
+    return data
 
 
 def claude_procs():
@@ -1017,7 +1123,7 @@ def button_region(screen_str, marker=RED_PILL_BTN):
 
 def parse_args(argv):
     opts = {"once": False, "all": False, "full": False, "hide_idle": False,
-            "interval": 60, "ctx_max": 200000}
+            "interval": 10, "ctx_max": 200000}
     i = 0
     while i < len(argv):
         a = argv[i]
