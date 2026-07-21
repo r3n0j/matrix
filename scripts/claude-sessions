@@ -825,8 +825,8 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
         sess = [c(T_LBL, "Session"),
                 hk("⏎", "focus/open"), hk("z", "pause"),
                 hk("w", "wake"), hk("d", "detail"), hk("^K", "kill")]
-        # Boutons souris en colonne dédiée, après Session (l'un au-dessus de l'autre).
-        buttons = ["", c(T_BTN, RED_PILL_BTN) + c(T_DIM, " n"),
+        # Boutons souris en colonne dédiée, après Session (séparés d'une ligne).
+        buttons = ["", c(T_BTN, RED_PILL_BTN) + c(T_DIM, " n"), "",
                    c(T_BTN, WAKE_BTN) + c(T_DIM, " W")]
         out = side_by_side([col1, general, nav, sess, buttons])
         if searching:  # saisie de filtre en cours
@@ -899,8 +899,8 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
     title = c(T_TITLE, "Sessions[%d]" % n)
     if rows < n:  # liste tronquée : indiquer la plage visible
         title += c(T_DIM, "  %d-%d" % (top + 1, min(top + rows, n)))
-    if paused is not None and USE_COLOR:  # logo Matrix calé en haut à droite, remonté d'une ligne
-        out = logo.overlay_right([""] + out, term.columns)
+    if paused is not None and USE_COLOR:  # logo Matrix à droite, descendu d'une ligne (sections en 1re ligne)
+        out = logo.overlay_right(out, term.columns, banner=[""] + logo.banner_rows())
     out += box(title, table, box_w)
     return "\n".join(out)
 
