@@ -1521,6 +1521,10 @@ def run_live(opts):
                     scroll -= 1
                 elif k in ("DOWN", "j", "J"):
                     scroll += 1
+                elif k == "MUP":
+                    scroll -= 3
+                elif k == "MDOWN":
+                    scroll += 3
                 elif k == "PGUP":
                     scroll -= 10
                 elif k == "PGDN":
