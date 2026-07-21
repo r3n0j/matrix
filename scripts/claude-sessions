@@ -809,9 +809,8 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
     #      le logo MATRIX en haut à droite (overlay_right) tient ce rôle. ----
     if paused is not None:  # mode live
         col1 = [
-            kv("Sessions", n),
-            kv("Sort", sort_key.ljust(SORT_LABEL_W)),
             kv("View", LEVEL_LABELS[level]),
+            kv("Sort", sort_key.ljust(SORT_LABEL_W)),
             kv("Refresh", "paused" if paused else "%ds" % interval),
             kv("Updated", when),
         ]
