@@ -1346,6 +1346,13 @@ def run_live(opts):
         return full or sort_key == "context"
 
     def refresh():
+        # Indicateur transitoire en bas d'écran pendant la collecte (synchrone) :
+        # visible surtout en vue complète / grand nombre de sessions.
+        if USE_COLOR:
+            term = shutil.get_terminal_size((120, 40))
+            sys.stdout.write("\033[%d;1H" % term.lines
+                             + c(T_ACTIVE, "⟳ refreshing…") + "\033[K")
+            sys.stdout.flush()
         return sort_sessions(collect(show_all, with_tokens=need_tokens()), sort_key)
 
     old = termios.tcgetattr(sys.stdin)
