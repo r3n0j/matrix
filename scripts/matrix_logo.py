@@ -6,6 +6,7 @@ par `redpill` (en-tête), pour un logo strictement identique entre les deux.
 """
 import random
 import re
+import unicodedata
 
 GREEN, BRIGHT, DIM, RESET = "\033[32m", "\033[92m", "\033[2m", "\033[0m"
 WHITE, DARK = "\033[97m", "\033[2;32m"
@@ -24,8 +25,14 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def vis(s):
-    """Largeur visible (glyphes demi-largeur uniquement -> len après strip ANSI)."""
-    return len(ANSI_RE.sub("", s))
+    """Largeur d'affichage en cellules (ANSI ignoré) ; glyphes larges (W/F) = 2."""
+    s = ANSI_RE.sub("", s)
+    w = 0
+    for ch in s:
+        if unicodedata.combining(ch):
+            continue
+        w += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+    return w
 
 
 def _rain_color(dist):
