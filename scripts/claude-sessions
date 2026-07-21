@@ -821,7 +821,8 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
         general = [c(T_LBL, "General"),
                    hk("F5", "refresh"), hk("p", "pause"), hk("?", "help"), hk("q", "quit")]
         nav = [c(T_LBL, "Navigation"),
-               hk("/", "filter"), hk("s", "sort"), hk("Tab", "view")]
+               hk("/", "filter"), hk("s", "sort"),
+               hk("Tab", "view"), hk("t", "columns")]
         sess = [c(T_LBL, "Session"),
                 hk("⏎", "focus/open"), hk("z", "pause"),
                 hk("w", "wake"), hk("d", "detail"), hk("^K", "kill")]
@@ -1049,7 +1050,8 @@ def help_lines():
 
     nav = [kd("↑↓ / j k", "navigate"), kd("PgUp/PgDn", "page"), kd("g / G", "top / bottom"),
            kd("/", "filter (Esc clears)"), kd("s", "sort (cycle columns)"),
-           kd("Tab", "view: normal / extended / full")]
+           kd("Tab", "view: normal / extended / full (+ background sessions)"),
+           kd("t", "toggle detailed columns (CTX/OUT/COST/HOST/MODEL)")]
     session = [kd("Enter", "focus the window, or resume if closed"),
                kd("z", "pause this session"), kd("w", "wake this session"),
                kd("d", "detail view"), kd("Ctrl+K", "kill (SIGTERM)")]
@@ -1325,8 +1327,9 @@ def wake_all():
 
 
 def run_live(opts):
-    level = 2 if (opts["all"] or opts["full"]) else 0  # 0 normal · 1 étendu · 2 complet
-    show_all, hide_idle, full = level == 2, level == 0, level == 2
+    level = 2 if opts["all"] else 0  # 0 normal · 1 étendu · 2 complet (+ sessions de fond)
+    show_all, hide_idle = level == 2, level == 0
+    detailed = opts["full"]  # colonnes détaillées (CTX/OUT/COST/HOST/MODEL), touche t
     paused = False
     sort_key = "age"
     sel = 0
@@ -1338,10 +1341,10 @@ def run_live(opts):
     if not sys.stdin.isatty():  # non interactif (pipe, watch…) : refresh simple
         while True:
             sys.stdout.write("\033[H\033[J")
-            s = drop_idle(sort_sessions(collect(show_all, with_tokens=full), sort_key),
+            s = drop_idle(sort_sessions(collect(show_all, with_tokens=detailed), sort_key),
                           hide_idle)
             sys.stdout.write(render(s, show_all, paused=False,
-                             interval=opts["interval"], full=full,
+                             interval=opts["interval"], full=detailed,
                              sort_key=sort_key, ctx_max=ctx_max,
                              hide_idle=hide_idle, level=level) + "\n")
             sys.stdout.flush()
@@ -1349,7 +1352,7 @@ def run_live(opts):
         return
 
     def need_tokens():
-        return full or sort_key == "context"
+        return detailed or sort_key == "context"
 
     def refresh():
         # Indicateur transitoire en bas d'écran pendant la collecte (synchrone) :
@@ -1387,7 +1390,7 @@ def run_live(opts):
                     top = sel - rows + 1
                 top = max(0, min(top, max(0, len(view) - rows)))
                 screen_str = render(view, show_all, paused=paused,
-                                    interval=opts["interval"], full=full, sel=sel,
+                                    interval=opts["interval"], full=detailed, sel=sel,
                                     sort_key=sort_key, ctx_max=ctx_max, top=top,
                                     query=query, searching=searching,
                                     hide_idle=hide_idle, level=level)
@@ -1467,15 +1470,19 @@ def run_live(opts):
                     sel = 0
                 elif k in ("G", "END"):
                     sel = (len(view) - 1) if view else 0
-                elif k == "\t":  # Tab : cycle normal → extended → full
+                elif k == "\t":  # Tab : cycle normal → extended → full (sessions affichées)
                     level = (level + 1) % 3
-                    show_all, hide_idle, full = level == 2, level == 0, level == 2
-                    if sort_key not in available_sorts(full):
-                        sort_key = "age"  # ex. context n'est plus proposé hors vue complet
+                    show_all, hide_idle = level == 2, level == 0
+                    sessions = refresh()
+                    sel = 0
+                elif k in ("t", "T"):  # bascule les colonnes détaillées (indépendant du niveau)
+                    detailed = not detailed
+                    if sort_key not in available_sorts(detailed):
+                        sort_key = "age"  # le tri context exige les colonnes détaillées
                     sessions = refresh()
                     sel = 0
                 elif k in ("s", "S"):
-                    sort_key = next_sort(sort_key, full)
+                    sort_key = next_sort(sort_key, detailed)
                     sessions = refresh()
                     sel = 0
                 elif k in ("p", "P"):
