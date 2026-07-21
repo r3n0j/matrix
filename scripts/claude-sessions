@@ -1270,7 +1270,7 @@ def focus_or_open(sess):
                 return
     try:
         subprocess.Popen(["kitty", "--directory", cwd or os.path.expanduser("~"),
-                          "zsh", "-ic", "matrix resume %s" % sess["sid"]],
+                          "zsh", "-ic", "construct resume %s" % sess["sid"]],
                          start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
