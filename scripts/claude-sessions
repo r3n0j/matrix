@@ -86,7 +86,7 @@ T_GREEN = "38;5;42"
 T_YELLOW = "38;5;214"
 T_RED = "38;5;197"
 T_STANDBY = "38;5;110"         # tour terminé, au repos — bleu-gris
-T_CURSOR = "38;5;16;48;5;51"   # ligne sélectionnée — noir sur fond aqua
+T_SELECT = "48;5;236"          # ligne sélectionnée — bande gris foncé discrète (préserve les couleurs)
 T_BTN = "1;38;5;16;48;5;46"    # boutons — noir gras sur fond vert Matrix
 
 
@@ -817,18 +817,14 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
         general = [c(T_LBL, "General"),
                    hk("F5", "refresh"), hk("p", "pause"), hk("?", "help"), hk("q", "quit")]
         nav = [c(T_LBL, "Navigation"),
-               hk("/", "filter"), hk("s", "sort"),
-               hk("↑↓", "navigate"), hk("Tab", "view")]
+               hk("/", "filter"), hk("s", "sort"), hk("Tab", "view")]
         sess = [c(T_LBL, "Session"),
                 hk("⏎", "focus/open"), hk("z", "pause"),
                 hk("w", "wake"), hk("d", "detail"), hk("^K", "kill")]
-        out = side_by_side([col1, general, nav, sess])
-        # Boutons souris SOUS le bloc colonnes : hors de la zone bannière (BANNER_ROWS
-        # lignes). Les emoji ⏰/💊 sont double-largeur alors que overlay_right/vis
-        # supposent des glyphes demi-largeur ; sur une ligne pairée à une rangée du
-        # logo, ils décaleraient l'alignement. Ici la ligne tombe au-delà de la bannière.
-        out.append(c(T_BTN, RED_PILL_BTN) + c(T_DIM, " n")
-                   + "   " + c(T_BTN, WAKE_BTN) + c(T_DIM, " W"))
+        # Boutons souris en colonne dédiée, après Session (l'un au-dessus de l'autre).
+        buttons = ["", c(T_BTN, RED_PILL_BTN) + c(T_DIM, " n"),
+                   c(T_BTN, WAKE_BTN) + c(T_DIM, " W")]
+        out = side_by_side([col1, general, nav, sess, buttons])
         if searching:  # saisie de filtre en cours
             out.append(c(T_KEY, "/") + c(T_VAL, query) + c(T_ACTIVE, "▌"))
         elif query:    # filtre appliqué
@@ -888,9 +884,10 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
                      pad(proj, 16), pad(fmt_age(last), 6), pad(fmt_age(age), 6)]
         cells.append(pad(trunc(s["last_prompt"], prompt_w), prompt_w))
         row = (" " * sep).join(cells)
-        if idx == sel:  # ligne sélectionnée : curseur k9s (noir sur aqua), pleine largeur
+        if idx == sel:  # ligne sélectionnée : bande gris foncé discrète (préserve les couleurs)
             if USE_COLOR:
-                row = c(T_CURSOR, pad(strip_ansi(row), contentw))
+                band, reset = "\033[%sm" % T_SELECT, "\033[0m"
+                row = band + pad(row, contentw).replace(reset, reset + band) + reset
             else:
                 row = ("> " + strip_ansi(row))[:contentw]
         table.append(row)
@@ -1051,7 +1048,10 @@ def help_lines():
               kd("d", "detail view"), kd("Ctrl+K", "kill (SIGTERM)")]
     lines += ["", c(T_LBL, "General")]
     lines += [kd("F5 / r", "refresh"), kd("p", "pause / resume auto-refresh"),
-              kd("n", "Red Pill (menu: new / resume)"), kd("W", "Wake Up Neo (wake all paused)"),
+              kd("n", "Red Pill — open the menu (new window) to resume a recent"),
+              kd("", "session or start a new one (pick repo + name)"),
+              kd("W", "Wake Up Neo — wake every paused session at once:"),
+              kd("", "focus it if still open, resume it if its window was closed"),
               kd("?", "toggle this help"), kd("q", "quit")]
     lines += ["", c(T_LBL, "Statuses")]
     descs = {
