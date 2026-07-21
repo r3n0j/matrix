@@ -1039,25 +1039,26 @@ def render_detail(lines, scroll, session):
 
 
 def help_lines():
-    """Contenu de l'écran d'aide (`?`) : raccourcis groupés puis statuts."""
+    """Sections encadrées de l'aide (`?`) : raccourcis groupés puis statuts."""
     def kd(key, desc):
         return c(T_KEY, key.ljust(12)) + c(T_DESC, desc)
-    lines = [c(T_LBL, "Navigation")]
-    lines += [kd("↑↓ / j k", "navigate"), kd("PgUp/PgDn", "page"),
-              kd("g / G", "top / bottom"), kd("/", "filter (Esc clears)"),
-              kd("s", "sort (cycle columns)"), kd("Tab", "view: normal / extended / full")]
-    lines += ["", c(T_LBL, "Session")]
-    lines += [kd("Enter", "focus the window, or resume if closed"),
-              kd("z", "pause this session"), kd("w", "wake this session"),
-              kd("d", "detail view"), kd("Ctrl+K", "kill (SIGTERM)")]
-    lines += ["", c(T_LBL, "General")]
-    lines += [kd("F5 / r", "refresh"), kd("p", "pause / resume auto-refresh"),
-              kd("n", "Red Pill — open the menu (new window) to resume a recent"),
-              kd("", "session or start a new one (pick repo + name)"),
-              kd("W", "Wake Up Neo — wake every paused session at once:"),
-              kd("", "focus it if still open, resume it if its window was closed"),
-              kd("?", "toggle this help"), kd("q", "quit")]
-    lines += ["", c(T_LBL, "Statuses")]
+
+    def boxed(title, rows):
+        w = max([visible_len(title) + 4] + [visible_len(r) for r in rows]) + 4
+        return box(c(T_LBL, title), rows, w)
+
+    nav = [kd("↑↓ / j k", "navigate"), kd("PgUp/PgDn", "page"), kd("g / G", "top / bottom"),
+           kd("/", "filter (Esc clears)"), kd("s", "sort (cycle columns)"),
+           kd("Tab", "view: normal / extended / full")]
+    session = [kd("Enter", "focus the window, or resume if closed"),
+               kd("z", "pause this session"), kd("w", "wake this session"),
+               kd("d", "detail view"), kd("Ctrl+K", "kill (SIGTERM)")]
+    general = [kd("F5 / r", "refresh"), kd("p", "pause / resume auto-refresh"),
+               kd("n", "Red Pill — open the menu (new window) to resume a recent"),
+               kd("", "session or start a new one (pick repo + name)"),
+               kd("W", "Wake Up Neo — wake every paused session at once:"),
+               kd("", "focus it if still open, resume it if its window was closed"),
+               kd("?", "toggle this help"), kd("q", "quit")]
     descs = {
         "active": "turn in progress (Claude working)",
         "live": "process alive, idle (no current turn)",
@@ -1066,10 +1067,15 @@ def help_lines():
         "idle": "process gone or stale",
         "paused": "manually paused",
     }
-    for kind in ("active", "live", "knocking", "standby", "idle", "paused"):
-        code, label = STATUS_META[kind]
-        lines.append(pad(c(code, label), 18) + c(T_DESC, descs[kind]))
-    return lines
+    statuses = [pad(c(code, STATUS_META[kind][1]), 16) + c(T_DESC, descs[kind])
+                for kind in ("active", "live", "knocking", "standby", "idle", "paused")
+                for code in (STATUS_META[kind][0],)]
+
+    out = []
+    for title, rows in [("Navigation", nav), ("Session", session),
+                        ("General", general), ("Statuses", statuses)]:
+        out += boxed(title, rows) + [""]
+    return out
 
 
 def render_help(scroll):
