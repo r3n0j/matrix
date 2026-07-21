@@ -1044,10 +1044,6 @@ def help_lines():
     def kd(key, desc):
         return c(T_KEY, key.ljust(12)) + c(T_DESC, desc)
 
-    def boxed(title, rows):
-        w = max([visible_len(title) + 4] + [visible_len(r) for r in rows]) + 4
-        return box(c(T_LBL, title), rows, w)
-
     nav = [kd("↑↓ / j k", "navigate"), kd("PgUp/PgDn", "page"), kd("g / G", "top / bottom"),
            kd("/", "filter (Esc clears)"), kd("s", "sort (cycle columns)"),
            kd("Tab", "view: normal / extended / full (+ background sessions)"),
@@ -1073,10 +1069,15 @@ def help_lines():
                 for kind in ("active", "live", "knocking", "standby", "idle", "paused")
                 for code in (STATUS_META[kind][0],)]
 
+    # Ordre aligné sur l'en-tête de la vue normale (General, Navigation, Session),
+    # et largeur de cadre commune à toutes les sections (comme gtlb).
+    sections = [("General", general), ("Navigation", nav),
+                ("Session", session), ("Statuses", statuses)]
+    w = max(max([visible_len(t) + 4] + [visible_len(r) for r in rows])
+            for t, rows in sections) + 4
     out = []
-    for title, rows in [("Navigation", nav), ("Session", session),
-                        ("General", general), ("Statuses", statuses)]:
-        out += boxed(title, rows) + [""]
+    for title, rows in sections:
+        out += box(c(T_LBL, title), rows, w) + [""]
     return out
 
 
