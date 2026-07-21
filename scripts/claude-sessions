@@ -1039,8 +1039,9 @@ def render_detail(lines, scroll, session):
     return "\n".join(head + window + ["", c(T_DIM, pos)]), scroll
 
 
-def help_lines():
-    """Sections encadrées de l'aide (`?`) : raccourcis groupés puis statuts."""
+def help_lines(width):
+    """Sections encadrées de l'aide (`?`) : raccourcis groupés puis statuts.
+    Les cadres prennent toute la largeur `width` de la fenêtre."""
     def kd(key, desc):
         return c(T_KEY, key.ljust(12)) + c(T_DESC, desc)
 
@@ -1069,22 +1070,20 @@ def help_lines():
                 for kind in ("active", "live", "knocking", "standby", "idle", "paused")
                 for code in (STATUS_META[kind][0],)]
 
-    # Ordre aligné sur l'en-tête de la vue normale (General, Navigation, Session),
-    # et largeur de cadre commune à toutes les sections (comme gtlb).
+    # Ordre aligné sur l'en-tête de la vue normale (General, Navigation, Session).
+    # Cadres à pleine largeur de la fenêtre.
     sections = [("General", general), ("Navigation", nav),
                 ("Session", session), ("Statuses", statuses)]
-    w = max(max([visible_len(t) + 4] + [visible_len(r) for r in rows])
-            for t, rows in sections) + 4
     out = []
     for title, rows in sections:
-        out += box(c(T_LBL, title), rows, w) + [""]
+        out += box(c(T_LBL, title), rows, width) + [""]
     return out
 
 
 def render_help(scroll):
     term = shutil.get_terminal_size((120, 40))
     height = max(3, term.lines - 6)
-    lines = help_lines()
+    lines = help_lines(term.columns)
     total = len(lines)
     scroll = max(0, min(scroll, max(0, total - height)))
     head = [
