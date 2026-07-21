@@ -821,8 +821,8 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
                hk("/", "filter"), hk("s", "sort"),
                hk("↑↓", "navigate"), hk("Tab", "view")]
         sess = [c(T_LBL, "Session"),
-                hk("⏎", "focus win"), hk("R", "resume"), hk("z", "pause"),
-                hk("w", "wake"), hk("o", "detail"), hk("^K", "kill")]
+                hk("⏎", "focus/open"), hk("R", "resume here"), hk("z", "pause"),
+                hk("w", "wake"), hk("d", "detail"), hk("^K", "kill")]
         out = side_by_side([col1, general, nav, sess])
         # Boutons souris SOUS le bloc colonnes : hors de la zone bannière (BANNER_ROWS
         # lignes). Les emoji ⏰/💊 sont double-largeur alors que overlay_right/vis
@@ -1047,9 +1047,10 @@ def help_lines():
               kd("g / G", "top / bottom"), kd("/", "filter (Esc clears)"),
               kd("s", "sort (cycle columns)"), kd("Tab", "view: normal / extended / full")]
     lines += ["", c(T_LBL, "Session")]
-    lines += [kd("Enter", "focus the agent's window"), kd("R", "resume (claude --resume)"),
+    lines += [kd("Enter", "focus the window, or resume if closed"),
+              kd("R", "resume in the current terminal (leaves the monitor)"),
               kd("z", "pause this session"), kd("w", "wake this session"),
-              kd("o", "detail view"), kd("Ctrl+K", "kill (SIGTERM)")]
+              kd("d", "detail view"), kd("Ctrl+K", "kill (SIGTERM)")]
     lines += ["", c(T_LBL, "General")]
     lines += [kd("F5 / r", "refresh"), kd("p", "pause / resume auto-refresh"),
               kd("n", "Red Pill (menu: new / resume)"), kd("W", "Wake Up Neo (wake all paused)"),
@@ -1425,7 +1426,7 @@ def run_live(opts):
                 elif k == "W":
                     wake_all()
                     sessions = refresh()
-                elif k in ("o", "O") and view:
+                elif k in ("d", "D") and view:
                     detail = view[sel]
                     detail_lines = build_detail(detail)
                     scroll = 0
