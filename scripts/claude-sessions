@@ -809,26 +809,27 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
     #      le logo MATRIX en haut à droite (overlay_right) tient ce rôle. ----
     if paused is not None:  # mode live
         col1 = [
+            "",  # décale View sous les items (pas au niveau des titres de sections)
             kv("View", LEVEL_LABELS[level]),
             kv("Sort", sort_key.ljust(SORT_LABEL_W)),
             kv("Refresh", "paused" if paused else "%ds" % interval),
             kv("Updated", when),
         ]
+        general = [c(T_LBL, "General"),
+                   hk("F5", "refresh"), hk("p", "pause"), hk("?", "help"), hk("q", "quit")]
         nav = [c(T_LBL, "Navigation"),
-               hk("<↑↓>", "navigate"), hk("</>", "search"),
-               hk("<s>", "sort"), hk("<Tab>", "view")]
+               hk("/", "filter"), hk("s", "sort"),
+               hk("↑↓", "navigate"), hk("Tab", "view")]
         sess = [c(T_LBL, "Session"),
-                hk("<⏎>", "focus win"), hk("<R>", "resume"), hk("<z>", "pause"),
-                hk("<w>", "wake"), hk("<o>", "detail"), hk("<^K>", "kill")]
-        mtx = [c(T_LBL, "General"),
-               hk("<p>", "pause"), hk("<F5>", "refresh"), hk("<q>", "quit")]
-        out = side_by_side([col1, mtx, nav, sess])
+                hk("⏎", "focus win"), hk("R", "resume"), hk("z", "pause"),
+                hk("w", "wake"), hk("o", "detail"), hk("^K", "kill")]
+        out = side_by_side([col1, general, nav, sess])
         # Boutons souris SOUS le bloc colonnes : hors de la zone bannière (BANNER_ROWS
         # lignes). Les emoji ⏰/💊 sont double-largeur alors que overlay_right/vis
         # supposent des glyphes demi-largeur ; sur une ligne pairée à une rangée du
         # logo, ils décaleraient l'alignement. Ici la ligne tombe au-delà de la bannière.
-        out.append(c(T_BTN, RED_PILL_BTN) + c(T_DIM, " <n>")
-                   + "   " + c(T_BTN, WAKE_BTN) + c(T_DIM, " <W>"))
+        out.append(c(T_BTN, RED_PILL_BTN) + c(T_DIM, " n")
+                   + "   " + c(T_BTN, WAKE_BTN) + c(T_DIM, " W"))
         if searching:  # saisie de filtre en cours
             out.append(c(T_KEY, "/") + c(T_VAL, query) + c(T_ACTIVE, "▌"))
         elif query:    # filtre appliqué
@@ -1027,9 +1028,57 @@ def render_detail(lines, scroll, session):
     scroll = max(0, min(scroll, max(0, total - height)))
     head = [
         c(T_LOGO, "Session detail"),
-        "   ".join([hk("<↑↓>", "scroll"), hk("<PgUp/Dn>", "page", 11),
-                    hk("<g/G>", "top/bottom"), hk("<Esc>", "back"),
-                    hk("<q>", "quit")]),
+        "   ".join([hk("↑↓", "scroll"), hk("PgUp/Dn", "page", 11),
+                    hk("g/G", "top/bottom"), hk("Esc", "back"),
+                    hk("q", "quit")]),
+        "",
+    ]
+    window = lines[scroll:scroll + height]
+    pos = ("%d–%d / %d" % (scroll + 1, min(scroll + height, total), total)) if total else "0"
+    return "\n".join(head + window + ["", c(T_DIM, pos)]), scroll
+
+
+def help_lines():
+    """Contenu de l'écran d'aide (`?`) : raccourcis groupés puis statuts."""
+    def kd(key, desc):
+        return c(T_KEY, key.ljust(12)) + c(T_DESC, desc)
+    lines = [c(T_LBL, "Navigation")]
+    lines += [kd("↑↓ / j k", "navigate"), kd("PgUp/PgDn", "page"),
+              kd("g / G", "top / bottom"), kd("/", "filter (Esc clears)"),
+              kd("s", "sort (cycle columns)"), kd("Tab", "view: normal / extended / full")]
+    lines += ["", c(T_LBL, "Session")]
+    lines += [kd("Enter", "focus the agent's window"), kd("R", "resume (claude --resume)"),
+              kd("z", "pause this session"), kd("w", "wake this session"),
+              kd("o", "detail view"), kd("Ctrl+K", "kill (SIGTERM)")]
+    lines += ["", c(T_LBL, "General")]
+    lines += [kd("F5 / r", "refresh"), kd("p", "pause / resume auto-refresh"),
+              kd("n", "Red Pill (menu: new / resume)"), kd("W", "Wake Up Neo (wake all paused)"),
+              kd("?", "toggle this help"), kd("q", "quit")]
+    lines += ["", c(T_LBL, "Statuses")]
+    descs = {
+        "active": "turn in progress (Claude working)",
+        "live": "process alive, idle (no current turn)",
+        "knocking": "waiting for your answer (AskUserQuestion / permission)",
+        "standby": "turn finished, terminal still open",
+        "idle": "process gone or stale",
+        "paused": "manually paused",
+    }
+    for kind in ("active", "live", "knocking", "standby", "idle", "paused"):
+        code, label = STATUS_META[kind]
+        lines.append(pad(c(code, label), 18) + c(T_DESC, descs[kind]))
+    return lines
+
+
+def render_help(scroll):
+    term = shutil.get_terminal_size((120, 40))
+    height = max(3, term.lines - 6)
+    lines = help_lines()
+    total = len(lines)
+    scroll = max(0, min(scroll, max(0, total - height)))
+    head = [
+        c(T_LOGO, "The Matrix — help"),
+        "   ".join([hk("↑↓", "scroll"), hk("PgUp/Dn", "page", 11),
+                    hk("g/G", "top/bottom"), hk("Esc", "back"), hk("q", "quit")]),
         "",
     ]
     window = lines[scroll:scroll + height]
@@ -1058,12 +1107,12 @@ def render_kill(ctx):
             lines.append(c(T_YELLOW, "Le PID %s n'existait déjà plus." % info))
         else:
             lines.append(c(T_RED, "Échec : %s" % info))
-        lines += ["", "   ".join([hk("<Esc>", "retour"), hk("<q>", "quit")])]
+        lines += ["", "   ".join([hk("Esc", "back"), hk("q", "quit")])]
         return "\n".join(lines)
 
     if ctx.get("denied"):
         lines.append(c(T_RED, "/proc inaccessible — impossible d'identifier le process."))
-        lines += ["", "   ".join([hk("<Esc>", "retour"), hk("<q>", "quit")])]
+        lines += ["", "   ".join([hk("Esc", "back"), hk("q", "quit")])]
         return "\n".join(lines)
 
     cands = ctx["cands"]
@@ -1071,7 +1120,7 @@ def render_kill(ctx):
         lines.append(c(T_YELLOW, "Aucun process claude vivant pour cette session."))
         lines.append(c(T_DIM, "Elle est déjà terminée — rien à tuer "
                               "(le transcript reste sur disque)."))
-        lines += ["", "   ".join([hk("<Esc>", "retour"), hk("<q>", "quit")])]
+        lines += ["", "   ".join([hk("Esc", "back"), hk("q", "quit")])]
         return "\n".join(lines)
 
     if len(cands) == 1:
@@ -1094,8 +1143,8 @@ def render_kill(ctx):
             if p.get("resume_id") == s.get("sid") else ""
         lines.append(mark + "PID " + c(T_VAL, str(p["pid"]))
                      + c(T_DIM, "   âge ") + age + tag + reliable)
-    lines += ["", "   ".join([hk("<↑↓>", "choisir"), hk("<y>", "fermer (SIGTERM)"),
-                              hk("<Esc>", "annuler"), hk("<q>", "quit")])]
+    lines += ["", "   ".join([hk("↑↓", "choose"), hk("y", "close (SIGTERM)"),
+                              hk("Esc", "cancel"), hk("q", "quit")])]
     return "\n".join(lines)
 
 
@@ -1381,6 +1430,9 @@ def run_live(opts):
                     detail_lines = build_detail(detail)
                     scroll = 0
                     screen = "detail"
+                elif k == "?":
+                    scroll = 0
+                    screen = "help"
                 elif k == "\x0b" and view:   # Ctrl+K
                     sess = view[sel]
                     procs = claude_procs()
@@ -1449,6 +1501,28 @@ def run_live(opts):
                     except Exception as e:
                         kill_ctx["result"] = ("err", str(e))
                     sessions = refresh()
+            elif screen == "help":  # écran d'aide : refresh suspendu
+                sys.stdout.write("\033[H\033[J")
+                content, scroll = render_help(scroll)
+                sys.stdout.write(content + "\n")
+                sys.stdout.flush()
+                k = read_key(None)
+                if k in ("ESC", "LEFT", "?"):
+                    screen = "list"
+                elif k in ("q", "Q"):
+                    break
+                elif k in ("UP", "k", "K"):
+                    scroll -= 1
+                elif k in ("DOWN", "j", "J"):
+                    scroll += 1
+                elif k == "PGUP":
+                    scroll -= 10
+                elif k == "PGDN":
+                    scroll += 10
+                elif k in ("g", "HOME"):
+                    scroll = 0
+                elif k in ("G", "END"):
+                    scroll = 10 ** 9
             else:  # vue détail : refresh suspendu
                 sys.stdout.write("\033[H\033[J")
                 content, scroll = render_detail(detail_lines, scroll, detail)
