@@ -18,7 +18,7 @@ FIGLET = [
 LOGO_W = max(len(line) for line in FIGLET)
 RAIN_ROWS = 5
 BANNER_ROWS = len(FIGLET) + RAIN_ROWS  # hauteur du bloc bannière
-KATA = "ｦｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789"
+KATA = "ｦｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ"
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
