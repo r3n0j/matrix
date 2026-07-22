@@ -865,7 +865,7 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
                hk("Tab", "view"), hk("t", "columns")]
         sess = [c(T_LBL, "Session"),
                 hk("⏎", "focus/open"), hk("z", "pause"), hk("x", "dismiss ◔"),
-                hk("w", "wake"), hk("d", "detail"), hk("e", "quit sess")]
+                hk("w", "wake"), hk("d", "detail"), hk("e", "exit")]
         # Boutons souris en colonne dédiée, après Session (séparés d'une ligne).
         buttons = ["", c(T_BTN, RED_PILL_BTN) + c(T_DIM, " n"), "",
                    c(T_BTN, WAKE_BTN) + c(T_DIM, " W")]
