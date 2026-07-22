@@ -511,7 +511,8 @@ def status_kind(sess, now):
         return "active", age    # fallback : outil/subagent en cours (dernier msg = tool_use)
     if sess["last_msg_type"] == "user" and age < RESPONDING_MAX:
         return "active", age    # prompt envoyé, Claude travaille dessus
-    if sess.get("done") and sess.get("live") and sess.get("asks"):
+    if (sess.get("done") and sess.get("live") and sess.get("asks")
+            and not sess.get("asking_dismissed")):
         return "maybe_asking", age  # Stop reçu mais le dernier message finit sur une question
     if sess.get("done") and sess.get("live"):
         return "standby", age   # Stop reçu, rien en cours, terminal encore ouvert
@@ -694,6 +695,7 @@ def collect(include_agents, with_tokens=False):
         s["waiting"] = e.get("waiting")
         s["done"] = e.get("done")
         s["busy"] = e.get("busy")
+        s["asking_dismissed"] = e.get("asking_dismissed")
         cn = s.get("custom_name")
         # ne garder le /rename que s'il est distinct (pas un persona, pas l'ai-title)
         s["custom_name"] = cn if (cn and cn not in pool and cn != s.get("title")) else None
@@ -775,7 +777,8 @@ LEVEL_LABELS = ["normal", "extended", "full"]  # Tab : jacked-in/paused/knocking
 
 # Ordre d'attention des statuts pour le tri « status » (paused est traité à part :
 # toujours relégué en fin de liste, quel que soit le tri).
-_STATUS_RANK = {"knocking": 0, "active": 1, "standby": 2, "live": 3, "idle": 4, "paused": 5}
+_STATUS_RANK = {"knocking": 0, "maybe_asking": 1, "active": 2, "standby": 3,
+                "live": 4, "idle": 5, "paused": 6}
 
 # Tris disponibles, dans l'ordre de cyclage (touche s) ; libellé = la clé elle-même
 # (anglais). Défaut = age. Chaque entrée : (clé, fn(s, now) -> valeur, reverse, full_only).
@@ -860,7 +863,7 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
                hk("/", "filter"), hk("s", "sort"),
                hk("Tab", "view"), hk("t", "columns")]
         sess = [c(T_LBL, "Session"),
-                hk("⏎", "focus/open"), hk("z", "pause"),
+                hk("⏎", "focus/open"), hk("z", "pause"), hk("x", "dismiss ◔"),
                 hk("w", "wake"), hk("d", "detail"), hk("^K", "kill")]
         # Boutons souris en colonne dédiée, après Session (séparés d'une ligne).
         buttons = ["", c(T_BTN, RED_PILL_BTN) + c(T_DIM, " n"), "",
@@ -1098,12 +1101,14 @@ def help_lines(width):
         "active": "turn in progress (Claude working)",
         "live": "process alive, idle (no current turn)",
         "knocking": "waiting for your answer (AskUserQuestion / permission)",
+        "maybe_asking": "last message looks like a question (heuristic — x to dismiss)",
         "standby": "turn finished, terminal still open",
         "idle": "process gone or stale",
         "paused": "manually paused",
     }
     statuses = [pad(c(code, STATUS_META[kind][1]), 16) + c(T_DESC, descs[kind])
-                for kind in ("active", "live", "knocking", "standby", "idle", "paused")
+                for kind in ("active", "live", "knocking", "maybe_asking",
+                             "standby", "idle", "paused")
                 for code in (STATUS_META[kind][0],)]
 
     # Ordre aligné sur l'en-tête de la vue normale (General, Navigation, Session).
@@ -1345,6 +1350,18 @@ def toggle_pause(sess):
     matrix_lib.set_paused(sid, note=note, cwd=sess.get("cwd"))
 
 
+def toggle_asking_dismissed(sess, now):
+    """Masque / ré-affiche l'état heuristique ◔ maybe-asking d'une session (faux
+    positif). Ne pose le masque que si la session est effectivement en maybe-asking ;
+    le clear reste toujours possible. Masque transitoire : levé au prochain tour."""
+    import matrix_lib
+    sid = sess["sid"]
+    if sess.get("asking_dismissed"):
+        matrix_lib.clear_asking_dismissed(sid)
+    elif status_kind(sess, now)[0] == "maybe_asking":
+        matrix_lib.set_asking_dismissed(sid, cwd=sess.get("cwd"))
+
+
 def wake_all():
     """Réveille toutes les sessions en pause (focus/rouvre chacune), efface leur flag.
     Renvoie le nombre de sessions traitées."""
@@ -1465,6 +1482,9 @@ def run_live(opts):
                     searching, sel = True, 0
                 elif k == "z" and view:
                     toggle_pause(view[sel])
+                    sessions = refresh()
+                elif k == "x" and view:
+                    toggle_asking_dismissed(view[sel], time.time())
                     sessions = refresh()
                 elif k == "w" and view:
                     import matrix_lib

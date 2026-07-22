@@ -89,6 +89,14 @@ class StatusKindTest(unittest.TestCase):
     def test_maybe_asking_registered_in_status_meta(self):
         self.assertIn("maybe_asking", cs.STATUS_META)
 
+    def test_maybe_asking_registered_in_status_rank(self):
+        self.assertIn("maybe_asking", cs._STATUS_RANK)
+
+    def test_dismissed_asking_falls_back_to_standby(self):
+        s = self._sess(done={"since": 1}, live=True, asks=True,
+                       asking_dismissed={"since": 2})
+        self.assertEqual(cs.status_kind(s, 1000.0)[0], "standby")
+
 
 if __name__ == "__main__":
     unittest.main()

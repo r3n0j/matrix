@@ -43,3 +43,8 @@ class StateHookTest(unittest.TestCase):
 
     def test_no_session_id_is_noop(self):
         hook.handle("set", {})  # ne lève pas
+
+    def test_busy_clears_asking_dismissed(self):
+        matrix_lib.set_asking_dismissed("s1")
+        hook.handle("busy", {"session_id": "s1", "cwd": "/x"})
+        self.assertNotIn("asking_dismissed", matrix_lib.get("s1") or {})

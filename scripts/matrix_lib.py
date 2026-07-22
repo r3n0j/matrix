@@ -335,6 +335,28 @@ def clear_done(sid):
             _save_state(state)
 
 
+def set_asking_dismissed(sid, cwd=None):
+    """Masque l'état heuristique `maybe_asking` d'une session (faux positif jugé
+    manuellement). Transitoire : levé au prochain tour (hook UserPromptSubmit)."""
+    now = time.time()
+    with _Lock():
+        state = _load_state()
+        entry = _ensure_entry(state["sessions"], sid, cwd, now)
+        entry["asking_dismissed"] = {"since": now}
+        _save_state(state)
+        return entry
+
+
+def clear_asking_dismissed(sid):
+    """Rétablit l'affichage de `maybe_asking` (idempotent)."""
+    with _Lock():
+        state = _load_state()
+        entry = state["sessions"].get(sid)
+        if entry and "asking_dismissed" in entry:
+            del entry["asking_dismissed"]
+            _save_state(state)
+
+
 def paused_sessions():
     """Sessions en pause, plus récentes d'abord, jointes au transcript pour label/cwd."""
     state = _load_state()

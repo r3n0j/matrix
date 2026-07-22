@@ -66,6 +66,7 @@ def handle(action, payload):
             matrix_lib.clear_waiting(sid)
             matrix_lib.clear_done(sid)
             matrix_lib.clear_paused(sid)  # activité réelle → sortie de veille (resume)
+            matrix_lib.clear_asking_dismissed(sid)  # nouveau tour → masque périmé
         elif action == "clear":      # Stop : tour terminé
             matrix_lib.clear_busy(sid)
             matrix_lib.clear_waiting(sid)

@@ -115,5 +115,26 @@ class SidResolutionTest(unittest.TestCase):
             del os.environ["CLAUDE_SESSION_ID"]
 
 
+class AskingDismissedPrimitivesTest(StateTestBase):
+    def test_set_asking_dismissed_creates_entry(self):
+        matrix_lib.set_asking_dismissed("s1", cwd="/x")
+        e = matrix_lib.get("s1")
+        self.assertIn("since", e["asking_dismissed"])
+        self.assertEqual(e["cwd"], "/x")
+
+    def test_clear_asking_dismissed_idempotent(self):
+        matrix_lib.set_asking_dismissed("s1")
+        matrix_lib.clear_asking_dismissed("s1")
+        matrix_lib.clear_asking_dismissed("s1")  # no-op
+        self.assertNotIn("asking_dismissed", matrix_lib.get("s1") or {})
+
+    def test_not_exempt_from_prune(self):
+        old = time.time() - matrix_lib.TTL - 10
+        self.write_state({"s1": {"seen": old, "asking_dismissed": {"since": old}}})
+        state = matrix_lib._load_state()
+        matrix_lib._prune(state["sessions"], time.time())
+        self.assertNotIn("s1", state["sessions"])
+
+
 if __name__ == "__main__":
     unittest.main()
