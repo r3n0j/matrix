@@ -30,6 +30,7 @@ Touches (mode live) :
   w               réveiller la session sélectionnée (focus / rouvre)
   W / [⏰ Wake Up Neo]  réveiller TOUTES les sessions en pause
   d               ouvrir le détail de la session (métadonnées + tours)
+  e               quitter proprement la session (/exit) puis fermer la fenêtre kitty
   Esc             revenir à la liste (depuis le détail)
   /               filtrer la liste (projet / titre / prompt) ; Esc efface
   Ctrl+K          fermer la session : tue le process (SIGTERM) après confirmation
@@ -864,7 +865,7 @@ def render(sessions, include_agents, paused=None, interval=None, full=False,
                hk("Tab", "view"), hk("t", "columns")]
         sess = [c(T_LBL, "Session"),
                 hk("⏎", "focus/open"), hk("z", "pause"), hk("x", "dismiss ◔"),
-                hk("w", "wake"), hk("d", "detail"), hk("^K", "kill")]
+                hk("w", "wake"), hk("d", "detail"), hk("e", "quit sess")]
         # Boutons souris en colonne dédiée, après Session (séparés d'une ligne).
         buttons = ["", c(T_BTN, RED_PILL_BTN) + c(T_DIM, " n"), "",
                    c(T_BTN, WAKE_BTN) + c(T_DIM, " W")]
@@ -1090,7 +1091,9 @@ def help_lines(width):
            kd("t", "toggle detailed columns (CTX/OUT/COST/HOST/MODEL)")]
     session = [kd("Enter", "focus the window, or resume if closed"),
                kd("z", "pause this session"), kd("w", "wake this session"),
-               kd("d", "detail view"), kd("Ctrl+K", "kill (SIGTERM)")]
+               kd("x", "dismiss ◔ maybe-asking (false positive)"),
+               kd("d", "detail view"), kd("e", "quit session (/exit + close kitty window)"),
+               kd("Ctrl+K", "kill (SIGTERM)")]
     general = [kd("F5 / r", "refresh"), kd("p", "pause / resume auto-refresh"),
                kd("n", "Red Pill — open the menu (new window) to resume a recent"),
                kd("", "session or start a new one (pick repo + name)"),
@@ -1200,6 +1203,34 @@ def render_kill(ctx):
     return "\n".join(lines)
 
 
+def render_exit(ctx):
+    """Écran d'exit propre : `/exit` envoyé à Claude puis fermeture de la fenêtre kitty.
+    `ctx` = {sess, result?}."""
+    s = ctx["sess"]
+    lines = [c(T_LOGO, "Exit propre — /exit puis fermeture de la fenêtre kitty"), "",
+             kv("Project", s.get("project") or "—"),
+             kv("Title", trunc(s.get("title") or "—", 60)),
+             kv("Cwd", s.get("cwd") or "—"),
+             kv("Session", (s.get("sid") or "")[:8]), ""]
+
+    res = ctx.get("result")
+    if res:
+        kind, _info = res
+        if kind == "ok":
+            lines.append(c(T_GREEN, "✓ /exit envoyé, fenêtre fermée."))
+            lines.append(c(T_DIM, "SessionEnd nettoie le registre et libère le persona."))
+        else:
+            lines.append(c(T_YELLOW, "Aucune fenêtre kitty joignable pour cette session."))
+            lines.append(c(T_DIM, "Pas de binding kitty (lancée hors matrix) ou déjà fermée."))
+        lines += ["", "   ".join([hk("Esc", "back"), hk("q", "quit")])]
+        return "\n".join(lines)
+
+    lines.append(c(T_VAL, "Envoyer /exit à la session et fermer sa fenêtre ?"))
+    lines.append(c(T_DIM, "Sortie propre (SessionEnd) — le transcript reste sur disque."))
+    lines += ["", "   ".join([hk("⏎", "exit + close"), hk("Esc", "cancel"), hk("q", "quit")])]
+    return "\n".join(lines)
+
+
 def read_key(timeout):
     """Lit une touche. Retourne 'UP'/'DOWN'/'ENTER'/'ESC'/'PGUP'/… ou le caractère.
     None si le délai expire. Distingue Esc seul d'une séquence de flèche."""
@@ -1302,6 +1333,49 @@ def _kitty_focus(sock, match):
         return False
 
 
+def _kitty_run(sock, args):
+    """Lance `kitty @ --to <sock> <args…>` (best-effort). True si returncode 0."""
+    if sock and not sock.startswith("unix:"):
+        sock = "unix:" + sock
+    try:
+        r = subprocess.run(["kitty", "@", "--to", sock] + list(args),
+                           timeout=5, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _kitty_targets(sess):
+    """(sock, match) pour joindre la fenêtre kitty de la session : binding enregistré
+    d'abord (précis, `id:`), puis découverte par titre (agent) et cwd sur les instances
+    kitty. À essayer dans l'ordre, en s'arrêtant à la première qui répond."""
+    targets = []
+    if sess.get("mx_socket") and sess.get("mx_window"):
+        targets.append((sess["mx_socket"], "id:%s" % sess["mx_window"]))
+    criteria = []
+    if sess.get("agent"):
+        criteria.append("title:%s" % sess["agent"])
+    if sess.get("cwd"):
+        criteria.append("cwd:%s" % sess["cwd"])
+    for sock in glob.glob("/tmp/kitty-*"):
+        for match in criteria:
+            targets.append((sock, match))
+    return targets
+
+
+def clean_exit(sess):
+    """Exit propre : envoie `/exit` à la session Claude (slash command → hook
+    SessionEnd, donc nettoyage du registre + libération du persona), puis ferme sa
+    fenêtre kitty. Essaie les cibles dans l'ordre et s'arrête à la première fenêtre
+    joignable. Renvoie ('ok', match) ou ('nowin', None)."""
+    for sock, match in _kitty_targets(sess):
+        if _kitty_run(sock, ["send-text", "--match", match, "/exit\r"]):
+            time.sleep(1.5)  # laisse Claude traiter /exit (SessionEnd) avant de fermer
+            _kitty_run(sock, ["close-window", "--match", match])
+            return ("ok", match)
+    return ("nowin", None)
+
+
 def focus_or_open(sess):
     """Focus la fenêtre kitty de la session ; sinon ouvre une reprise personnifiée.
 
@@ -1390,6 +1464,7 @@ def run_live(opts):
     query = ""            # filtre actif
     searching = False     # saisie du filtre en cours
     kill_ctx = None       # contexte de l'écran de fermeture (SIGTERM)
+    exit_ctx = None       # contexte de l'écran d'exit propre (/exit + close-window)
 
     if not sys.stdin.isatty():  # non interactif (pipe, watch…) : refresh simple
         while True:
@@ -1510,6 +1585,9 @@ def run_live(opts):
                     kill_ctx = {"sess": sess, "cands": kill_candidates(sess, procs) or [],
                                 "sel": 0, "denied": procs is None}
                     screen = "kill"
+                elif k in ("e", "E") and view:
+                    exit_ctx = {"sess": view[sel]}
+                    screen = "exit"
                 elif k in ("UP", "k", "K"):
                     sel = max(0, sel - 1)
                 elif k in ("DOWN", "j", "J"):
@@ -1575,6 +1653,23 @@ def run_live(opts):
                         kill_ctx["result"] = ("gone", target["pid"])
                     except Exception as e:
                         kill_ctx["result"] = ("err", str(e))
+                    sessions = refresh()
+            elif screen == "exit":  # écran d'exit propre : refresh suspendu
+                sys.stdout.write("\033[H\033[J")
+                sys.stdout.write(render_exit(exit_ctx) + "\n")
+                sys.stdout.flush()
+                k = read_key(None)
+                if exit_ctx.get("result"):       # action faite : seule sortie possible
+                    if k in ("ESC", "LEFT"):
+                        screen = "list"
+                    elif k in ("q", "Q"):
+                        break
+                elif k in ("ESC", "LEFT"):
+                    screen = "list"
+                elif k in ("q", "Q"):
+                    break
+                elif k == "ENTER":
+                    exit_ctx["result"] = clean_exit(exit_ctx["sess"])
                     sessions = refresh()
             elif screen == "help":  # écran d'aide : refresh suspendu
                 sys.stdout.write("\033[H\033[J")

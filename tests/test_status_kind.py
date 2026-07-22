@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import unittest
+from unittest import mock
 
 SCRIPTS = os.path.join(os.path.dirname(__file__), "..", "scripts")
 sys.path.insert(0, SCRIPTS)
@@ -96,6 +97,41 @@ class StatusKindTest(unittest.TestCase):
         s = self._sess(done={"since": 1}, live=True, asks=True,
                        asking_dismissed={"since": 2})
         self.assertEqual(cs.status_kind(s, 1000.0)[0], "standby")
+
+
+class KittyTargetsTest(unittest.TestCase):
+    def test_binding_comes_first(self):
+        s = {"mx_socket": "unix:/tmp/kitty-1", "mx_window": "42",
+             "agent": "Neo", "cwd": "/x"}
+        self.assertEqual(cs._kitty_targets(s)[0], ("unix:/tmp/kitty-1", "id:42"))
+
+    def test_no_binding_yields_no_id_match(self):
+        s = {"agent": "Neo", "cwd": "/x"}  # pas de binding
+        self.assertTrue(all(not m.startswith("id:") for _sock, m in cs._kitty_targets(s)))
+
+
+class CleanExitTest(unittest.TestCase):
+    def test_sends_exit_then_closes_window(self):
+        calls = []
+
+        def fake_run(sock, args):
+            calls.append(list(args))
+            return args[0] == "send-text"
+
+        with mock.patch.object(cs, "_kitty_targets",
+                               return_value=[("unix:/tmp/kitty-1", "id:42")]), \
+             mock.patch.object(cs, "_kitty_run", side_effect=fake_run), \
+             mock.patch.object(cs.time, "sleep", lambda *_a: None):
+            kind, _info = cs.clean_exit({"sid": "s1"})
+        self.assertEqual(kind, "ok")
+        self.assertEqual(calls[0][0], "send-text")
+        self.assertIn("/exit\r", calls[0])
+        self.assertEqual(calls[1][0], "close-window")
+
+    def test_no_window_reachable(self):
+        with mock.patch.object(cs, "_kitty_targets", return_value=[]), \
+             mock.patch.object(cs.time, "sleep", lambda *_a: None):
+            self.assertEqual(cs.clean_exit({"sid": "s1"})[0], "nowin")
 
 
 if __name__ == "__main__":
