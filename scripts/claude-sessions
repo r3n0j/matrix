@@ -146,8 +146,30 @@ _PARSE_CACHE = {}
 # message et les métadonnées de tour vivent en fin de fichier). Le reste (started,
 # entrypoint, background, is_agent, title/ai-title) est immuable ou stable : établi
 # au 1er parse complet, puis conservé.
-_RECENT_FIELDS = ("cwd", "branch", "last_msg_type", "working",
+_RECENT_FIELDS = ("cwd", "branch", "last_msg_type", "working", "asks",
                   "last_prompt", "custom_name", "model")
+
+
+_QUESTION_CUES = ("veux-tu", "souhaites-tu", "dois-je", "faut-il", "préfères-tu",
+                  "tu veux que je", "dis-moi si", "should i", "do you want",
+                  "would you like", "let me know")
+
+
+def _looks_like_question(text):
+    """Heuristique (A1) : le dernier message assistant se termine-t-il par une
+    question ? Signal principal = point d'interrogation final (après strip du
+    markdown de fin) ; à défaut, quelques tournures d'invite fréquentes sur la
+    dernière ligne. Volontairement approximatif — l'état 'maybe-asking' assume
+    cette incertitude, à la différence du 'knocking' issu des hooks."""
+    if not text:
+        return False
+    tail = text.rstrip().rstrip("*_`\"')]}").rstrip()
+    if not tail:
+        return False
+    if tail.endswith("?"):
+        return True
+    last_line = tail.splitlines()[-1].lower()
+    return any(cue in last_line for cue in _QUESTION_CUES)
 
 
 def _scan_reversed(lines, with_tokens):
@@ -162,6 +184,7 @@ def _scan_reversed(lines, with_tokens):
     git_branch = None
     last_msg_type = None
     working = None  # dernier message = tool_use assistant en cours (outil/subagent)
+    asks = None  # dernier message = assistant terminant sur une question (heuristique)
     is_agent = False
     context_tokens = None
     output_total = 0
@@ -200,9 +223,18 @@ def _scan_reversed(lines, with_tokens):
                 _o = None
             if _o is not None:
                 _content = (_o.get("message") or {}).get("content")
-                working = (_o.get("type") == "assistant" and isinstance(_content, list)
+                _is_asst = _o.get("type") == "assistant" and isinstance(_content, list)
+                working = (_is_asst
                            and any(isinstance(b, dict) and b.get("type") == "tool_use"
                                    for b in _content))
+                # Question en attente : un assistant qui ne lance PAS d'outil et dont
+                # le dernier bloc texte ressemble à une question (sinon un tour finit
+                # sur un tool_use → c'est du travail, pas une attente de réponse).
+                _texts = ([b.get("text", "") for b in _content
+                           if isinstance(b, dict) and b.get("type") == "text"]
+                          if _is_asst else [])
+                asks = bool(_is_asst and not working and _texts
+                            and _looks_like_question(_texts[-1]))
         # On parse une ligne message si : cwd manquant, modèle manquant (assistant),
         # ou mode tokens (tous les assistants, pour le cumul).
         if is_msg and (cwd is None or (is_asst and (model is None or with_tokens))):
@@ -232,7 +264,7 @@ def _scan_reversed(lines, with_tokens):
                                           + (u.get("cache_creation_input_tokens") or 0))
     return {
         "cwd": cwd, "branch": git_branch, "last_msg_type": last_msg_type,
-        "working": bool(working),
+        "working": bool(working), "asks": bool(asks),
         "last_prompt": (last_prompt or "").replace("\n", " ").strip(),
         "custom_name": custom_name, "model": model,
         "ai_title": ai_title, "is_agent": is_agent,
@@ -284,7 +316,7 @@ def _assemble(path, rev, started, entrypoint, with_tokens):
         "sid": sid, "path": path, "started": started, "background": background,
         "cwd": rev["cwd"], "project": project, "branch": rev["branch"], "title": title,
         "last_prompt": rev["last_prompt"], "last_msg_type": rev["last_msg_type"],
-        "working": rev["working"], "is_agent": rev["is_agent"],
+        "working": rev["working"], "asks": rev["asks"], "is_agent": rev["is_agent"],
         "entrypoint": entrypoint, "custom_name": rev["custom_name"], "mtime": mtime,
         "context_tokens": rev["context_tokens"], "output_total": rev["output_total"],
         "cost": cost, "model": rev["model"],
@@ -454,6 +486,7 @@ def kill_candidates(sess, procs):
 STATUS_META = {  # état → (couleur, libellé thème Matrix) — glyphes mono-cellule
     "paused": (T_LBL, "‖ paused"),      # flag manuel (veille)
     "knocking": (T_YELLOW, "◑ knocking"),  # flag waiting (AskUserQuestion / permission)
+    "maybe_asking": (T_YELLOW, "◔ maybe-asking"),  # done + question texte libre (heuristique)
     "live": (T_ACTIVE, "● jacked in"),
     "active": (T_ACTIVE, "● in the matrix"),
     "standby": (T_STANDBY, "◇ standby"),  # flag done : tour terminé, au repos
@@ -464,8 +497,9 @@ STATUS_META = {  # état → (couleur, libellé thème Matrix) — glyphes mono-
 def status_kind(sess, now):
     """État de la session + âge depuis mtime. Les flags explicites priment :
     paused (manuel), knocking (waiting : AskUserQuestion/permission), puis
-    l'activité réelle (busy/working/prompt), puis standby (done : tour terminé
-    et terminal encore ouvert), enfin la liveness/âge (live, sinon unplugged)."""
+    l'activité réelle (busy/working/prompt), puis maybe_asking (done mais le
+    dernier message finit sur une question — heuristique), standby (done : tour
+    terminé), enfin la liveness/âge (live, sinon unplugged)."""
     age = now - sess["mtime"]
     if sess.get("paused"):
         return "paused", age
@@ -477,6 +511,8 @@ def status_kind(sess, now):
         return "active", age    # fallback : outil/subagent en cours (dernier msg = tool_use)
     if sess["last_msg_type"] == "user" and age < RESPONDING_MAX:
         return "active", age    # prompt envoyé, Claude travaille dessus
+    if sess.get("done") and sess.get("live") and sess.get("asks"):
+        return "maybe_asking", age  # Stop reçu mais le dernier message finit sur une question
     if sess.get("done") and sess.get("live"):
         return "standby", age   # Stop reçu, rien en cours, terminal encore ouvert
     if age < ACTIVE_MAX:
