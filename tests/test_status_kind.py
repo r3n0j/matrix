@@ -99,6 +99,16 @@ class StatusKindTest(unittest.TestCase):
         self.assertEqual(cs.status_kind(s, 1000.0)[0], "standby")
 
 
+class DisplayTitleTest(unittest.TestCase):
+    def test_rename_prefixes_ai_title(self):
+        s = {"title": "session 2zaefz", "custom_name": "Web Search"}
+        self.assertEqual(cs.display_title(s), "Web Search · session 2zaefz")
+
+    def test_without_rename_is_ai_title(self):
+        s = {"title": "session 2zaefz", "custom_name": None}
+        self.assertEqual(cs.display_title(s), "session 2zaefz")
+
+
 class KittyTargetsTest(unittest.TestCase):
     def test_binding_comes_first(self):
         s = {"mx_socket": "unix:/tmp/kitty-1", "mx_window": "42",

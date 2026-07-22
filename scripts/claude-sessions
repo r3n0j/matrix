@@ -609,14 +609,22 @@ def pad(s, n):
     return s + " " * max(0, n - visible_len(s))
 
 
+def display_title(s):
+    """Libellé affiché d'une session : « /rename · ai-title » si un /rename existe,
+    sinon l'ai-title (ou le fallback « session <sid> »). Texte brut, sans couleur —
+    partagé par la cellule TITLE du tableau et les écrans de confirmation."""
+    ai = s.get("title") or ""
+    cn = s.get("custom_name")
+    return (cn + " · " + ai) if cn else ai
+
+
 def title_cell(s, width):
     """Cellule TITLE : « /rename · ai-title » (rename en clair, ai-title en gris)
     quand un vrai /rename existe ; sinon juste l'ai-title."""
-    ai = s.get("title") or ""
     cn = s.get("custom_name")
     if not cn:
-        return trunc(ai, width)
-    full = trunc(cn + " · " + ai, width)
+        return trunc(s.get("title") or "", width)
+    full = trunc(display_title(s), width)
     if full.startswith(cn):
         return c(T_VAL, cn) + c(T_DIM, full[len(cn):])
     return c(T_VAL, full)
@@ -1147,7 +1155,7 @@ def render_kill(ctx):
     s = ctx["sess"]
     lines = [c(T_LOGO, "Fermer une session — SIGTERM"), "",
              kv("Project", s.get("project") or "—"),
-             kv("Title", trunc(s.get("title") or "—", 60)),
+             kv("Title", trunc(display_title(s) or "—", 60)),
              kv("Cwd", s.get("cwd") or "—"),
              kv("Session", (s.get("sid") or "")[:8]), ""]
 
@@ -1209,7 +1217,7 @@ def render_exit(ctx):
     s = ctx["sess"]
     lines = [c(T_LOGO, "Exit propre — /exit puis fermeture de la fenêtre kitty"), "",
              kv("Project", s.get("project") or "—"),
-             kv("Title", trunc(s.get("title") or "—", 60)),
+             kv("Title", trunc(display_title(s) or "—", 60)),
              kv("Cwd", s.get("cwd") or "—"),
              kv("Session", (s.get("sid") or "")[:8]), ""]
 
