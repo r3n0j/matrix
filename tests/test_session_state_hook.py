@@ -48,3 +48,26 @@ class StateHookTest(unittest.TestCase):
         matrix_lib.set_asking_dismissed("s1")
         hook.handle("busy", {"session_id": "s1", "cwd": "/x"})
         self.assertNotIn("asking_dismissed", matrix_lib.get("s1") or {})
+
+    def test_clear_keeps_active_while_background_tasks_run(self):
+        matrix_lib.set_busy("s1", cwd="/x")
+        hook.handle("clear", {"session_id": "s1", "cwd": "/x",
+                              "background_tasks": [{"id": "1", "status": "running"}]})
+        entry = matrix_lib.get("s1")
+        self.assertIn("busy", entry)      # tour toujours en cours (sous-agents actifs)
+        self.assertNotIn("done", entry)   # pas de bascule en standby
+
+    def test_clear_sets_done_when_background_tasks_finished(self):
+        matrix_lib.set_busy("s1", cwd="/x")
+        hook.handle("clear", {"session_id": "s1", "cwd": "/x",
+                              "background_tasks": [{"id": "1", "status": "completed"}]})
+        entry = matrix_lib.get("s1")
+        self.assertNotIn("busy", entry)
+        self.assertIn("done", entry)
+
+    def test_clear_sets_done_without_background_tasks(self):
+        matrix_lib.set_busy("s1", cwd="/x")
+        hook.handle("clear", {"session_id": "s1", "cwd": "/x"})
+        entry = matrix_lib.get("s1")
+        self.assertNotIn("busy", entry)
+        self.assertIn("done", entry)

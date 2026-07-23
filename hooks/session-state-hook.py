@@ -28,6 +28,24 @@ def read_payload():
         return {}
 
 
+def has_active_background_tasks(payload):
+    """Vrai s'il reste au moins une tâche de fond active (sous-agent `Task` ou
+    Bash `run_in_background`). Le payload Stop expose `background_tasks` : une
+    liste d'objets {id, status, description}. Tant qu'une tâche n'est pas dans un
+    état terminal, l'agent principal travaille encore (il attend ces réponses) :
+    on ne doit donc pas clore le tour. Miroir de la garde de notify-event.py."""
+    terminal = {"completed", "killed", "failed", "error", "cancelled", "done"}
+    tasks = payload.get("background_tasks")
+    if not isinstance(tasks, list):
+        return False
+    for task in tasks:
+        if not isinstance(task, dict):
+            return True
+        if (task.get("status") or "").lower() not in terminal:
+            return True
+    return False
+
+
 def is_background(payload):
     """Session de fond (agent, cron, SDK) : ne pas suivre l'état d'attente."""
     path = payload.get("transcript_path")
@@ -68,6 +86,8 @@ def handle(action, payload):
             matrix_lib.clear_paused(sid)  # activité réelle → sortie de veille (resume)
             matrix_lib.clear_asking_dismissed(sid)  # nouveau tour → masque périmé
         elif action == "clear":      # Stop : tour terminé
+            if has_active_background_tasks(payload):
+                return               # sous-agents encore actifs : le tour continue
             matrix_lib.clear_busy(sid)
             matrix_lib.clear_waiting(sid)
             matrix_lib.set_done(sid, cwd=payload.get("cwd"))
