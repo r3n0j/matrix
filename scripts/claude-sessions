@@ -60,6 +60,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import matrix_logo as logo
 
 PROJECTS = os.path.expanduser("~/.claude/projects")
+HOME = os.path.expanduser("~")
 
 ACTIVE_MAX = 15       # s : en dessous → actif
 WAITING_MAX = 300     # s : en dessous → en attente, au delà → inactif
@@ -1353,6 +1354,18 @@ def _kitty_run(sock, args):
         return False
 
 
+def _focus_criteria(agent, cwd):
+    """Critères `kitty @ --match` pour retrouver la fenêtre d'une session, du plus
+    spécifique au moins. Exclut cwd==HOME : trop générique, il matcherait une
+    fenêtre au repos quelconque du home (dont le TUI matrix lui-même)."""
+    criteria = []
+    if agent:
+        criteria.append("title:%s" % agent)
+    if cwd and os.path.realpath(cwd) != os.path.realpath(HOME):
+        criteria.append("cwd:%s" % cwd)
+    return criteria
+
+
 def _kitty_targets(sess):
     """(sock, match) pour joindre la fenêtre kitty de la session : binding enregistré
     d'abord (précis, `id:`), puis découverte par titre (agent) et cwd sur les instances
@@ -1360,13 +1373,8 @@ def _kitty_targets(sess):
     targets = []
     if sess.get("mx_socket") and sess.get("mx_window"):
         targets.append((sess["mx_socket"], "id:%s" % sess["mx_window"]))
-    criteria = []
-    if sess.get("agent"):
-        criteria.append("title:%s" % sess["agent"])
-    if sess.get("cwd"):
-        criteria.append("cwd:%s" % sess["cwd"])
     for sock in glob.glob("/tmp/kitty-*"):
-        for match in criteria:
+        for match in _focus_criteria(sess.get("agent"), sess.get("cwd")):
             targets.append((sock, match))
     return targets
 
@@ -1386,28 +1394,26 @@ def clean_exit(sess):
 
 def focus_or_open(sess):
     """Focus la fenêtre kitty de la session ; sinon ouvre une reprise personnifiée.
+    Renvoie True si la session a effectivement été focus ou relancée, False sinon
+    (l'appelant s'en sert pour ne lever le flag paused qu'en cas de vrai réveil).
 
     1) binding enregistré (mx_socket + mx_window) ; 2) à défaut, découverte parmi
     les instances kitty en matchant le titre (nom d'agent) puis le cwd ; 3) sinon,
     reprise dans une nouvelle fenêtre."""
     agent, cwd = sess.get("agent"), sess.get("cwd")
     if sess.get("mx_window") and _kitty_focus(sess.get("mx_socket"), "id:%s" % sess["mx_window"]):
-        return
-    criteria = []
-    if agent:
-        criteria.append("title:%s" % agent)
-    if cwd:
-        criteria.append("cwd:%s" % cwd)
+        return True
     for sock in glob.glob("/tmp/kitty-*"):
-        for match in criteria:
+        for match in _focus_criteria(agent, cwd):
             if _kitty_focus(sock, match):
-                return
+                return True
     try:
-        subprocess.Popen(["kitty", "--directory", cwd or os.path.expanduser("~"),
+        subprocess.Popen(["kitty", "--directory", cwd or HOME,
                           "zsh", "-ic", "construct resume %s" % sess["sid"]],
                          start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
     except Exception:
-        pass
+        return False
 
 
 def open_redpill():
@@ -1454,8 +1460,12 @@ def wake_all():
     paused = matrix_lib.paused_sessions()
     for p in paused:
         try:
-            focus_or_open({"sid": p["sid"], "cwd": p.get("cwd"), "agent": p.get("agent")})
-            matrix_lib.clear_paused(p["sid"])
+            woke = focus_or_open({"sid": p["sid"], "cwd": p.get("cwd"),
+                                  "agent": p.get("agent"),
+                                  "mx_window": p.get("kitty_window_id"),
+                                  "mx_socket": p.get("kitty_listen_on")})
+            if woke:
+                matrix_lib.clear_paused(p["sid"])
         except Exception:
             pass
     return len(paused)

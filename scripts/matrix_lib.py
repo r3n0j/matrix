@@ -374,6 +374,8 @@ def paused_sessions():
             "label": session_label(sid, cwd),
             "note": p.get("note", ""),
             "since": p.get("since", 0),
+            "kitty_window_id": e.get("kitty_window_id"),
+            "kitty_listen_on": e.get("kitty_listen_on"),
         })
     out.sort(key=lambda s: s["since"], reverse=True)
     return out
